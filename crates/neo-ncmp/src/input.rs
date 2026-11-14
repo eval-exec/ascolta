@@ -576,6 +576,26 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_key_and_action_specs_never_panic() {
+        let alphabet: Vec<char> = "ctrl+alt+shift+abcdefghijklmnopqrstuvwxyz0123456789:-_ ,"
+            .chars()
+            .collect();
+        let mut state = 0xdead_beefu32;
+        for _ in 0..1_000 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let length = (state as usize) % 24;
+            let mut spec = String::new();
+            for _ in 0..length {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                spec.push(alphabet[(state as usize) % alphabet.len()]);
+            }
+            let _ = parse_chord(&spec);
+            let _ = parse_action(&spec);
+            let _ = parse_screen_name(&spec);
+        }
+    }
+
+    #[test]
     fn parses_action_specs() {
         assert_eq!(
             parse_action("screen:history").unwrap(),

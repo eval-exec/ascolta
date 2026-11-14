@@ -69,7 +69,8 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 - [x] Render matrix test: every screen at 80×24, 120×40, and 200×60
 - [x] Property-style tests for filter parsing and cell-width fitting
 - [ ] `insta` snapshot files for key screens
-- [ ] Keymap fuzzing and MPD protocol fuzzing
+- [x] Property-style keymap and MPD argument-quoting tests
+- [ ] Fuzz the MPD response parser
 - [ ] Benchmarks for search, filtering, and 100k-song rendering
 - [x] CI live-MPD job against a private MPD instance
 - [x] Packaging: Nix flake, PKGBUILD, man page, shell completions

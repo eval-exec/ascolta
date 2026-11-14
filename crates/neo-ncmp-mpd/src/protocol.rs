@@ -193,6 +193,41 @@ mod tests {
     }
 
     #[test]
+    fn quoting_roundtrips_arbitrary_arguments() {
+        fn unquote(quoted: &str) -> String {
+            let inner = &quoted[1..quoted.len() - 1];
+            let mut output = String::new();
+            let mut characters = inner.chars();
+            while let Some(character) = characters.next() {
+                if character == '\\' {
+                    output.push(characters.next().expect("escaped character"));
+                } else {
+                    output.push(character);
+                }
+            }
+            output
+        }
+
+        let alphabet: Vec<char> = "ab \"\\'./:🎵界_0129".chars().collect();
+        let mut state = 0x1234_5678u32;
+        for _ in 0..1_000 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let length = (state as usize) % 32;
+            let mut value = String::new();
+            for _ in 0..length {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                value.push(alphabet[(state as usize) % alphabet.len()]);
+            }
+            let quoted = quote(&value).unwrap();
+            assert!(quoted.starts_with('"') && quoted.ends_with('"'));
+            assert_eq!(unquote(&quoted), value);
+            let line = format_command("add", &[&value]).unwrap();
+            assert!(line.ends_with('\n'));
+        }
+        assert!(quote("line\nbreak").is_err());
+    }
+
+    #[test]
     fn formats_commands() {
         assert_eq!(
             format_command("playid", &["42"]).unwrap(),
