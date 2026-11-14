@@ -36,6 +36,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Directory-first file browser (`0`) over MPD `lsinfo`; open folders, enqueue, or replace the queue
 - Library-wide fuzzy search (`/`) using `nucleo-matcher`, run on a coalescing worker
 - Structured search filters: `artist:`, `album:`, `title:`, `genre:`, `format:`, `year:>=1990`, `-genre:rock`
+- Saved smart playlists: named filter queries in the palette, with play-all/enqueue-all
 - Stored playlists: browse, load/play, append, save queue as, rename, delete, edit songs
 - Command palette (`:`) for every global action
 - Session restore: last screen, cursors, playlists pane, lyrics offset
@@ -160,6 +161,7 @@ Defaults match ncmpcpp where practical. Every binding is overridable under
 | `Enter` (history) | Queue the selected most-played song |
 | `a` / `A` (browser) | Enqueue / replace queue and play |
 | `Enter` (outputs) | Toggle output |
+| `Ctrl-A` / `Ctrl-R` (search) | Enqueue all / replace queue with all results |
 | `R` | Reload state/library (or History/Browser) |
 
 ### Search filters
@@ -183,6 +185,20 @@ artist:portishead album:"third" year:>=2008 -genre:rock sour
 
 Prefix any filter with `-` to exclude matches (`-genre:rock`). Quote values that
 contain spaces. Unknown fields and unparseable years stay ordinary fuzzy terms.
+Inside the search overlay, `Ctrl-A` enqueues every displayed result and `Ctrl-R`
+replaces the queue with them and starts playback.
+
+Saved queries live under `[search.saved]` and appear in the command palette (`:`)
+as smart playlists:
+
+```toml
+[search.saved]
+"90s" = "year:1990-1999"
+"Portishead" = "artist:portishead"
+```
+
+Choose one to open the search overlay pre-filled; then use `Ctrl-R` to play the
+whole set or `Ctrl-A` to append it.
 
 Example override:
 

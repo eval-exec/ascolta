@@ -1,110 +1,47 @@
-//! Command palette: a searchable list of global actions.
+//! Command palette: a searchable list of global actions and saved searches.
+
+use std::collections::BTreeMap;
 
 use crate::input::Action;
 
-#[derive(Debug, Clone, Copy)]
-pub struct PaletteItem {
-    pub label: &'static str,
-    pub action: Action,
+#[derive(Debug, Clone)]
+pub enum PaletteAction {
+    Action(Action),
+    /// Open the search overlay with a saved filter query.
+    Search(String),
 }
 
-const ITEMS: &[PaletteItem] = &[
-    PaletteItem {
-        label: "Play / pause",
-        action: Action::TogglePlay,
-    },
-    PaletteItem {
-        label: "Stop",
-        action: Action::Stop,
-    },
-    PaletteItem {
-        label: "Next track",
-        action: Action::NextTrack,
-    },
-    PaletteItem {
-        label: "Previous track",
-        action: Action::PreviousTrack,
-    },
-    PaletteItem {
-        label: "Volume up",
-        action: Action::VolumeUp,
-    },
-    PaletteItem {
-        label: "Volume down",
-        action: Action::VolumeDown,
-    },
-    PaletteItem {
-        label: "Repeat: toggle",
-        action: Action::ToggleRepeat,
-    },
-    PaletteItem {
-        label: "Random: toggle",
-        action: Action::ToggleRandom,
-    },
-    PaletteItem {
-        label: "Single: toggle",
-        action: Action::ToggleSingle,
-    },
-    PaletteItem {
-        label: "Consume: toggle",
-        action: Action::ToggleConsume,
-    },
-    PaletteItem {
-        label: "Go to queue",
-        action: Action::GotoScreen(0),
-    },
-    PaletteItem {
-        label: "Go to library",
-        action: Action::GotoScreen(1),
-    },
-    PaletteItem {
-        label: "Go to playlists",
-        action: Action::GotoScreen(2),
-    },
-    PaletteItem {
-        label: "Go to outputs",
-        action: Action::GotoScreen(3),
-    },
-    PaletteItem {
-        label: "Go to server stats",
-        action: Action::GotoScreen(4),
-    },
-    PaletteItem {
-        label: "Go to lyrics",
-        action: Action::GotoScreen(5),
-    },
-    PaletteItem {
-        label: "Go to visualizer",
-        action: Action::GotoScreen(6),
-    },
-    PaletteItem {
-        label: "Go to tags",
-        action: Action::GotoScreen(7),
-    },
-    PaletteItem {
-        label: "Go to history",
-        action: Action::GotoScreen(8),
-    },
-    PaletteItem {
-        label: "Go to file browser",
-        action: Action::GotoScreen(9),
-    },
-    PaletteItem {
-        label: "Search library",
-        action: Action::OpenSearch,
-    },
-    PaletteItem {
-        label: "Reload everything",
-        action: Action::Refresh,
-    },
-    PaletteItem {
-        label: "Help",
-        action: Action::ToggleHelp,
-    },
-    PaletteItem {
-        label: "Quit",
-        action: Action::Quit,
-    },
+#[derive(Debug, Clone)]
+pub struct PaletteItem {
+    pub label: String,
+    pub action: PaletteAction,
+}
+
+const COMMANDS: &[(&str, Action)] = &[
+    ("Play / pause", Action::TogglePlay),
+    ("Stop", Action::Stop),
+    ("Next track", Action::NextTrack),
+    ("Previous track", Action::PreviousTrack),
+    ("Volume up", Action::VolumeUp),
+    ("Volume down", Action::VolumeDown),
+    ("Repeat: toggle", Action::ToggleRepeat),
+    ("Random: toggle", Action::ToggleRandom),
+    ("Single: toggle", Action::ToggleSingle),
+    ("Consume: toggle", Action::ToggleConsume),
+    ("Go to queue", Action::GotoScreen(0)),
+    ("Go to library", Action::GotoScreen(1)),
+    ("Go to playlists", Action::GotoScreen(2)),
+    ("Go to outputs", Action::GotoScreen(3)),
+    ("Go to server stats", Action::GotoScreen(4)),
+    ("Go to lyrics", Action::GotoScreen(5)),
+    ("Go to visualizer", Action::GotoScreen(6)),
+    ("Go to tags", Action::GotoScreen(7)),
+    ("Go to history", Action::GotoScreen(8)),
+    ("Go to file browser", Action::GotoScreen(9)),
+    ("Search library", Action::OpenSearch),
+    ("Reload everything", Action::Refresh),
+    ("Help", Action::ToggleHelp),
+    ("Quit", Action::Quit),
 ];
 
 #[derive(Debug, Default)]
@@ -113,12 +50,29 @@ pub struct PaletteState {
     pub query: String,
     pub results: Vec<usize>,
     pub cursor: usize,
+    items: Vec<PaletteItem>,
 }
 
 impl PaletteState {
-    pub fn open(&mut self) {
+    /// Opens the palette with `[search.saved]` appended as smart playlists.
+    pub fn open(&mut self, saved: &BTreeMap<String, String>) {
         self.active = true;
         self.query.clear();
+        self.items.clear();
+        self.items
+            .extend(COMMANDS.iter().map(|(label, action)| PaletteItem {
+                label: (*label).to_string(),
+                action: PaletteAction::Action(*action),
+            }));
+        self.items.extend(
+            saved
+                .iter()
+                .filter(|(_, query)| !query.trim().is_empty())
+                .map(|(name, query)| PaletteItem {
+                    label: format!("Smart playlist: {name}"),
+                    action: PaletteAction::Search(query.clone()),
+                }),
+        );
         self.refresh();
     }
 
@@ -128,7 +82,8 @@ impl PaletteState {
 
     pub fn refresh(&mut self) {
         let query = self.query.to_ascii_lowercase();
-        self.results = ITEMS
+        self.results = self
+            .items
             .iter()
             .enumerate()
             .filter(|(_, item)| {
@@ -150,18 +105,17 @@ impl PaletteState {
         }
     }
 
-    pub fn selected(&self) -> Option<PaletteItem> {
+    pub fn selected(&self) -> Option<&PaletteItem> {
         self.results
             .get(self.cursor)
-            .and_then(|&index| ITEMS.get(index))
-            .copied()
+            .and_then(|&index| self.items.get(index))
     }
 
-    pub fn result_label(&self, position: usize) -> Option<&'static str> {
+    pub fn result_label(&self, position: usize) -> Option<&str> {
         self.results
             .get(position)
-            .and_then(|&index| ITEMS.get(index))
-            .map(|item| item.label)
+            .and_then(|&index| self.items.get(index))
+            .map(|item| item.label.as_str())
     }
 }
 
@@ -169,10 +123,15 @@ impl PaletteState {
 mod tests {
     use super::*;
 
+    fn open() -> PaletteState {
+        let mut palette = PaletteState::default();
+        palette.open(&BTreeMap::new());
+        palette
+    }
+
     #[test]
     fn filters_commands_case_insensitively() {
-        let mut palette = PaletteState::default();
-        palette.open();
+        let mut palette = open();
         assert!(palette.results.len() > 5);
         palette.query = "GO TO LIBR".into();
         palette.refresh();
@@ -182,11 +141,25 @@ mod tests {
 
     #[test]
     fn cursor_is_bounded() {
-        let mut palette = PaletteState::default();
-        palette.open();
+        let mut palette = open();
         palette.move_cursor(10_000);
         assert_eq!(palette.cursor, palette.results.len() - 1);
         palette.move_cursor(-10_000);
         assert_eq!(palette.cursor, 0);
+    }
+
+    #[test]
+    fn saved_queries_become_smart_playlists() {
+        let mut saved = BTreeMap::new();
+        saved.insert("90s".into(), "year:1990-1999".into());
+        let mut palette = PaletteState::default();
+        palette.open(&saved);
+        palette.query = "smart".into();
+        palette.refresh();
+        assert_eq!(palette.results.len(), 1);
+        match &palette.selected().unwrap().action {
+            PaletteAction::Search(query) => assert_eq!(query, "year:1990-1999"),
+            PaletteAction::Action(_) => panic!("expected a saved search"),
+        }
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -14,6 +14,7 @@ pub struct Config {
     pub visualizer: VisualizerConfig,
     pub scrobbling: ScrobblingConfig,
     pub stats: StatsConfig,
+    pub search: SearchConfig,
     /// `[keys.<context>]` tables: key spec -> action name.
     pub keys: HashMap<String, HashMap<String, String>>,
     pub theme: ThemeConfig,
@@ -124,6 +125,13 @@ impl ScrobblingConfig {
             && !self.lastfm_api_secret.is_empty()
             && !self.lastfm_session_key.is_empty()
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SearchConfig {
+    /// Named filter queries offered by the command palette as smart playlists.
+    pub saved: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -283,6 +291,9 @@ mod tests {
             [keys.global]
             "ctrl+j" = "next_track"
 
+            [search.saved]
+            "90s" = "year:1990-1999"
+
             [theme]
             accent = '#ff00ff'
             "#,
@@ -297,6 +308,10 @@ mod tests {
         );
         assert!(config.visualizer.enabled);
         assert_eq!(config.visualizer.bars, 32);
+        assert_eq!(
+            config.search.saved.get("90s").map(String::as_str),
+            Some("year:1990-1999")
+        );
         assert!(config.scrobbling.listenbrainz_enabled());
         assert!(!config.scrobbling.lastfm_enabled());
         assert_eq!(config.keys["queue"]["d"], "play_selected");

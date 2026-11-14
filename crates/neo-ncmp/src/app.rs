@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,7 +20,7 @@ use crate::input::{Action, Keymap};
 use crate::lyrics::LyricsDoc;
 use crate::mpd_worker::{self, Command, MpdHandle, Msg, PlayerOption};
 use crate::mpris::{self, MprisSnapshot};
-use crate::palette::PaletteState;
+use crate::palette::{PaletteAction, PaletteState};
 use crate::scrobbler::{
     self, ScrobbleEvent, ScrobbleHandle, ScrobbleKind, ScrobbleTrack, now_unix, scrobble_threshold,
 };
@@ -1055,7 +1056,7 @@ impl App {
             Action::Quit => self.should_quit = true,
             Action::ToggleHelp => self.help = !self.help,
             Action::OpenSearch => self.open_search(),
-            Action::OpenPalette => self.palette.open(),
+            Action::OpenPalette => self.open_palette(),
             Action::NextScreen => self.set_screen(self.screen.next()),
             Action::PreviousScreen => self.set_screen(self.screen.previous()),
             Action::GotoScreen(index) => {
@@ -1431,9 +1432,12 @@ impl App {
         match key.code {
             KeyCode::Esc => self.palette.close(),
             KeyCode::Enter => {
-                if let Some(item) = self.palette.selected() {
+                if let Some(item) = self.palette.selected().cloned() {
                     self.palette.close();
-                    self.handle_action(item.action);
+                    match item.action {
+                        PaletteAction::Action(action) => self.handle_action(action),
+                        PaletteAction::Search(query) => self.open_search_with(query),
+                    }
                 }
             }
             KeyCode::Up => self.palette.move_cursor(-1),
@@ -1456,7 +1460,16 @@ impl App {
         }
     }
 
+    fn open_palette(&mut self) {
+        let saved = self.config.search.saved.clone();
+        self.palette.open(&saved);
+    }
+
     fn open_search(&mut self) {
+        self.open_search_with(String::new());
+    }
+
+    fn open_search_with(&mut self, query: String) {
         let Some(index) = self.search_index.clone() else {
             self.toast_info("Library is still loading");
             return;
@@ -1467,6 +1480,7 @@ impl App {
         }
         tracing::debug!(items = index.len(), "opening search");
         self.search.open();
+        self.search.query = query;
         self.request_search(index);
     }
 
@@ -1493,6 +1507,8 @@ impl App {
                 }
                 KeyCode::Char('n') => self.search.move_cursor(1),
                 KeyCode::Char('p') => self.search.move_cursor(-1),
+                KeyCode::Char('a') => self.queue_all_search_results(false),
+                KeyCode::Char('r') => self.queue_all_search_results(true),
                 _ => {}
             }
             return;
@@ -1514,6 +1530,40 @@ impl App {
                 self.refresh_search();
             }
             _ => {}
+        }
+    }
+
+    /// Enqueues every URI represented by the current result set, deduplicated.
+    fn queue_all_search_results(&mut self, replace: bool) {
+        let uris = {
+            let Some(index) = self.search_index.as_ref() else {
+                return;
+            };
+            let mut seen = HashSet::new();
+            let mut uris = Vec::new();
+            for &position in &self.search.results {
+                let Some(item) = index.items.get(position) else {
+                    continue;
+                };
+                for uri in &item.uris {
+                    if seen.insert(uri.clone()) {
+                        uris.push(uri.to_string());
+                    }
+                }
+            }
+            uris
+        };
+        if uris.is_empty() {
+            return;
+        }
+        let count = uris.len();
+        if replace {
+            self.mpd.send(Command::ReplaceAndPlay(uris));
+            self.search.close();
+            self.toast_info(format!("Playing {count} track(s)"));
+        } else {
+            self.mpd.send(Command::AppendUris(uris));
+            self.toast_info(format!("Enqueued {count} track(s)"));
         }
     }
 
@@ -2413,6 +2463,76 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn test_index() -> Arc<SearchIndex> {
+        let library = Library::build(vec![
+            Song {
+                uri: Arc::from("a/one.flac"),
+                artist: Some(Arc::from("Portishead")),
+                album: Some(Arc::from("Dummy")),
+                title: Some(Arc::from("Sour Times")),
+                ..Song::default()
+            },
+            Song {
+                uri: Arc::from("a/two.flac"),
+                artist: Some(Arc::from("Portishead")),
+                album: Some(Arc::from("Dummy")),
+                title: Some(Arc::from("Mysterons")),
+                ..Song::default()
+            },
+        ]);
+        Arc::new(SearchIndex::build(&library))
+    }
+
+    #[test]
+    fn search_can_enqueue_or_play_all_results() {
+        let (mut app, mut commands) = app_with_commands();
+        app.search_index = Some(test_index());
+        app.search.active = true;
+        app.search.query = "artist:portishead".into();
+        app.search.update(app.search_index.as_ref().expect("index"));
+
+        app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        match commands.try_recv() {
+            Ok(Command::AppendUris(mut uris)) => {
+                uris.sort_unstable();
+                assert_eq!(uris, vec!["a/one.flac", "a/two.flac"]);
+            }
+            other => panic!("expected AppendUris, got {other:?}"),
+        }
+        assert!(app.search.active);
+
+        app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        match commands.try_recv() {
+            Ok(Command::ReplaceAndPlay(mut uris)) => {
+                uris.sort_unstable();
+                assert_eq!(uris, vec!["a/one.flac", "a/two.flac"]);
+            }
+            other => panic!("expected ReplaceAndPlay, got {other:?}"),
+        }
+        assert!(!app.search.active);
+    }
+
+    #[test]
+    fn palette_opens_saved_smart_playlists() {
+        let (mut app, _commands) = app_with_commands();
+        app.search_index = Some(test_index());
+        app.config
+            .search
+            .saved
+            .insert("90s".into(), "year:1990-1999".into());
+
+        app.on_key(key(KeyCode::Char(':')));
+        assert!(app.palette.active);
+        for character in "smart".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+
+        assert!(!app.palette.active);
+        assert!(app.search.active);
+        assert_eq!(app.search.query, "year:1990-1999");
     }
 
     #[test]

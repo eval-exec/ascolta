@@ -41,6 +41,12 @@ channels = 2
 bits = 16
 bars = 64
 
+[search.saved]
+# Named filter queries appear in the command palette as smart playlists.
+# Open one, then Enter a result, Ctrl-A to enqueue all, or Ctrl-R to play all.
+# "90s" = "year:1990-1999"
+# "Favourites" = "artist:portishead album:dummy"
+
 [scrobbling]
 # Disabled by default. Tokens can also come from environment variables:
 # NEO_NCMP_LISTENBRAINZ_TOKEN, NEO_NCMP_LASTFM_API_KEY,
