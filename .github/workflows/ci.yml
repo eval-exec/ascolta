@@ -29,3 +29,47 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  live-mpd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install MPD
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mpd mpc
+
+      - name: Start a private MPD
+        run: |
+          mkdir -p "$HOME/mpd/music" "$HOME/mpd/playlists"
+          cat > "$HOME/mpd/mpd.conf" <<EOF
+          music_directory "$HOME/mpd/music"
+          playlist_directory "$HOME/mpd/playlists"
+          db_file "$HOME/mpd/database"
+          state_file "$HOME/mpd/state"
+          sticker_file "$HOME/mpd/sticker.sql"
+          bind_to_address "127.0.0.1"
+          port "6601"
+          audio_output {
+            type "null"
+            name "null"
+          }
+          EOF
+          mpd --no-daemon "$HOME/mpd/mpd.conf" &
+          for _ in $(seq 1 20); do
+            mpc -h 127.0.0.1 -p 6601 status && exit 0
+            sleep 1
+          done
+          echo "MPD did not start" >&2
+          exit 1
+
+      - name: Live MPD tests
+        env:
+          MPD_HOST: 127.0.0.1
+          MPD_PORT: 6601
+        run: cargo test -p neo-ncmp-mpd --test live -- --ignored --nocapture

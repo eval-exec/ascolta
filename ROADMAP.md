@@ -71,7 +71,7 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 - [ ] `insta` snapshot files for key screens
 - [ ] Keymap fuzzing and MPD protocol fuzzing
 - [ ] Benchmarks for search, filtering, and 100k-song rendering
-- [ ] CI live-MPD job with a generated test library
+- [x] CI live-MPD job against a private MPD instance
 - [x] Packaging: Nix flake, PKGBUILD, man page, shell completions
 - [x] GitHub release workflow with Linux x86_64/aarch64 archives
 - [ ] AUR publishing automation
