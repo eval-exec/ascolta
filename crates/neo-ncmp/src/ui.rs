@@ -188,6 +188,7 @@ fn draw_header(app: &mut App, frame: &mut Frame, area: Rect) {
 
     // Counts are useful but push the last tab off narrower terminals.
     let show_counts = area.width >= 170;
+    let compact = area.width < 140;
     let mut spans = vec![Span::styled(
         " neo-ncmp ",
         Style::default()
@@ -210,7 +211,14 @@ fn draw_header(app: &mut App, frame: &mut Frame, area: Rect) {
             Screen::Playlists if show_counts => {
                 format!(" {number} Playlists ({}) ", app.playlists.len())
             }
-            _ => format!(" {number} {} ", screen.title()),
+            _ => format!(
+                " {number} {} ",
+                if compact {
+                    screen.short_title()
+                } else {
+                    screen.title()
+                }
+            ),
         };
         let style = if *screen == app.screen {
             Style::default()

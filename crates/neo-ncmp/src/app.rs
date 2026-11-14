@@ -129,6 +129,22 @@ impl Screen {
         }
     }
 
+    /// Abbreviated title for narrow terminals.
+    pub fn short_title(self) -> &'static str {
+        match self {
+            Self::Queue => "Q",
+            Self::Library => "Lib",
+            Self::Playlists => "Pl",
+            Self::Outputs => "Out",
+            Self::Stats => "St",
+            Self::Lyrics => "Ly",
+            Self::Visualizer => "Vis",
+            Self::TagEditor => "Tag",
+            Self::History => "Hist",
+            Self::Browser => "Br",
+        }
+    }
+
     /// The number shown in the header and used by the number keys.
     pub fn key_number(self) -> usize {
         if self == Self::Browser {
@@ -3625,6 +3641,104 @@ mod tests {
         assert!(text.contains('▀'), "halfblock cover art should be painted");
     }
 
+    fn buffer_text(width: u16, height: u16, app: &mut App) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| crate::ui::draw(app, frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn snapshot_app() -> App {
+        let mut app = app();
+        app.config.layout.cover_sidebar = false;
+        app.connection = ConnectionState::Connected("0.24.0".into());
+        app.status = Some(MpdStatus {
+            state: PlaybackState::Paused,
+            volume: Some(70),
+            playlist_length: 3,
+            elapsed: Duration::from_secs(42),
+            duration: Some(Duration::from_secs(206)),
+            audio: Some(neo_ncmp_domain::AudioFormat {
+                sample_rate: 44_100,
+                bits: 16,
+                channels: 2,
+            }),
+            ..MpdStatus::default()
+        });
+        app.current = Some(Song {
+            uri: Arc::from("Portishead/Dummy/02 Sour Times.flac"),
+            artist: Some(Arc::from("Portishead")),
+            album: Some(Arc::from("Dummy")),
+            title: Some(Arc::from("Sour Times")),
+            duration: Some(Duration::from_secs(206)),
+            ..Song::default()
+        });
+        app.queue = vec![
+            Song {
+                id: Some(1),
+                pos: Some(0),
+                uri: Arc::from("Portishead/Dummy/01 Mysterons.flac"),
+                artist: Some(Arc::from("Portishead")),
+                album: Some(Arc::from("Dummy")),
+                title: Some(Arc::from("Mysterons")),
+                duration: Some(Duration::from_secs(305)),
+                ..Song::default()
+            },
+            Song {
+                id: Some(2),
+                pos: Some(1),
+                uri: Arc::from("Portishead/Dummy/02 Sour Times.flac"),
+                artist: Some(Arc::from("Portishead")),
+                album: Some(Arc::from("Dummy")),
+                title: Some(Arc::from("Sour Times")),
+                duration: Some(Duration::from_secs(206)),
+                ..Song::default()
+            },
+            Song {
+                id: Some(3),
+                pos: Some(2),
+                uri: Arc::from("Massive Attack/Mezzanine/01 Angel.flac"),
+                artist: Some(Arc::from("Massive Attack")),
+                album: Some(Arc::from("Mezzanine")),
+                title: Some(Arc::from("Angel")),
+                duration: Some(Duration::from_secs(382)),
+                ..Song::default()
+            },
+        ];
+        app
+    }
+
+    #[test]
+    fn snapshot_queue_screen() {
+        let mut app = snapshot_app();
+        app.screen = Screen::Queue;
+        insta::assert_snapshot!(buffer_text(120, 40, &mut app));
+    }
+
+    #[test]
+    fn snapshot_library_screen() {
+        let mut app = snapshot_app();
+        app.screen = Screen::Library;
+        app.library = Some(Arc::new(Library::build(app.queue.clone())));
+        insta::assert_snapshot!(buffer_text(120, 40, &mut app));
+    }
+
     #[test]
     fn every_screen_renders_at_common_terminal_sizes() {
         use ratatui::Terminal;
@@ -4210,6 +4324,24 @@ mod tests {
             text.contains("0 Browser"),
             "last screen tab must stay visible"
         );
+
+        let backend = TestBackend::new(120, 42);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            text.contains("0 Br"),
+            "compact tabs stay visible at 120 columns"
+        );
+        assert_eq!(app.mouse.tabs.len(), Screen::ALL.len());
 
         let backend = TestBackend::new(200, 42);
         let mut terminal = Terminal::new(backend).unwrap();
