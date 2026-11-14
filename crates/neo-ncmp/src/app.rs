@@ -635,6 +635,19 @@ impl App {
         if let Some(path) = &config_path {
             spawn_config_watcher(path.clone(), tx.clone());
         }
+        let mut ipc_path = None;
+        if config.ipc.enabled {
+            let path = config.ipc.socket_path();
+            match crate::ipc::spawn(path.clone(), tx.clone()) {
+                Ok(()) => {
+                    tracing::info!(path = %path.display(), "IPC socket ready");
+                    ipc_path = Some(path);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, path = %path.display(), "could not start IPC socket");
+                }
+            }
+        }
         let mut app = App::new(
             config.clone(),
             AppDeps {
@@ -692,6 +705,9 @@ impl App {
             if app.should_quit {
                 break;
             }
+        }
+        if let Some(path) = &ipc_path {
+            crate::ipc::cleanup(path);
         }
         app.save_session();
         Ok(())
@@ -960,6 +976,10 @@ impl App {
             }
             Msg::ConfigFileChanged => {
                 self.config_reload_at = Some(Instant::now() + Duration::from_millis(250));
+            }
+            Msg::Ipc { line, reply } => {
+                let response = crate::ipc::handle(&line, self);
+                let _ = reply.send(response);
             }
             Msg::Browser { uri, entries } => {
                 if self.browser.uri == uri {
@@ -1783,6 +1803,104 @@ impl App {
     fn open_palette(&mut self) {
         let saved = self.config.search.saved.clone();
         self.palette.open(&saved);
+    }
+
+    pub(crate) fn ipc_set_screen(&mut self, name: &str) -> Result<(), String> {
+        let screen = match name.trim().to_ascii_lowercase().as_str() {
+            "queue" => Screen::Queue,
+            "library" => Screen::Library,
+            "playlists" => Screen::Playlists,
+            "outputs" => Screen::Outputs,
+            "stats" => Screen::Stats,
+            "lyrics" => Screen::Lyrics,
+            "visualizer" | "spectrum" => Screen::Visualizer,
+            "tags" | "tag-editor" | "tag editor" => Screen::TagEditor,
+            "history" => Screen::History,
+            "browser" | "files" | "file browser" => Screen::Browser,
+            _ => return Err(format!("unknown screen {name:?}")),
+        };
+        self.set_screen(screen);
+        Ok(())
+    }
+
+    pub(crate) fn ipc_search(&mut self, query: String) -> Result<(), String> {
+        if self
+            .search_index
+            .as_ref()
+            .is_none_or(|index| index.is_empty())
+        {
+            return Err("library is not loaded yet".into());
+        }
+        self.open_search_with(query);
+        Ok(())
+    }
+
+    pub(crate) fn ipc_action(&mut self, spec: &str) -> Result<(), String> {
+        let action = crate::input::parse_action(spec)?;
+        self.handle_action(action);
+        Ok(())
+    }
+
+    pub(crate) fn ipc_play_playlist(&mut self, name: &str) -> Result<(), String> {
+        if name.trim().is_empty() {
+            return Err("playlist name is empty".into());
+        }
+        self.mpd.send(Command::LoadPlaylist {
+            name: name.to_string(),
+            replace: true,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn ipc_notify(&mut self, message: String) {
+        self.toast_info(message);
+    }
+
+    pub(crate) fn ipc_volume(&mut self, volume: u8) {
+        self.mpd.send(Command::SetVolume(volume.min(100)));
+    }
+
+    pub(crate) fn ipc_seek(&mut self, seconds: f64) {
+        self.mpd
+            .send(Command::SeekTo((seconds * 1000.0).round() as u64));
+    }
+
+    pub(crate) fn ipc_status(&self) -> serde_json::Value {
+        use serde_json::json;
+        let status = self.status.as_ref();
+        let connection = match self.connection {
+            ConnectionState::Connecting => "connecting",
+            ConnectionState::Connected(_) => "connected",
+            ConnectionState::Disconnected => "disconnected",
+        };
+        let playback = status.map_or("stopped", |status| match status.state {
+            PlaybackState::Playing => "playing",
+            PlaybackState::Paused => "paused",
+            PlaybackState::Stopped => "stopped",
+        });
+        json!({
+            "connection": connection,
+            "screen": self.screen.title(),
+            "state": playback,
+            "volume": status.and_then(|status| status.volume),
+            "repeat": status.is_some_and(|status| status.repeat),
+            "random": status.is_some_and(|status| status.random),
+            "single": status.is_some_and(|status| status.single),
+            "consume": status.is_some_and(|status| status.consume),
+            "elapsed": self.effective_elapsed().as_secs_f64(),
+            "duration": status
+                .and_then(|status| status.duration)
+                .map(|duration| duration.as_secs_f64()),
+            "queue_length": self.queue.len(),
+            "library_loaded": self.library.is_some(),
+            "song": self.current.as_ref().map(|song| json!({
+                "uri": song.uri.as_ref(),
+                "title": song.display_title(),
+                "artist": song.display_artist(),
+                "album": song.display_album(),
+                "duration": song.duration.map(|duration| duration.as_secs_f64()),
+            })),
+        })
     }
 
     fn open_search(&mut self) {
@@ -2951,6 +3069,31 @@ mod tests {
         let queue = app.mouse.queue.expect("queue hit area");
         assert_eq!(queue.offset, 0);
         assert!(queue.rect.height > 0);
+    }
+
+    #[test]
+    fn ipc_handles_screen_action_status_and_errors() {
+        let (mut app, mut commands) = app_with_commands();
+        app.queue = queue_songs(2);
+
+        let response = crate::ipc::handle(r#"{"command":"screen","value":"library"}"#, &mut app);
+        assert!(response.contains(r#""ok":true"#));
+        assert_eq!(app.screen, Screen::Library);
+
+        let response = crate::ipc::handle(r#"{"command":"action","value":"next_track"}"#, &mut app);
+        assert!(response.contains(r#""ok":true"#));
+        assert!(matches!(commands.try_recv(), Ok(Command::Next)));
+
+        let response = crate::ipc::handle(r#"{"command":"status"}"#, &mut app);
+        assert!(response.contains(r#""queue_length":2"#));
+        assert!(response.contains(r#""screen":"Library""#));
+
+        let response = crate::ipc::handle(r#"{"command":"screen","value":"nope"}"#, &mut app);
+        assert!(response.contains(r#""ok":false"#));
+        assert!(response.contains("unknown screen"));
+
+        let response = crate::ipc::handle("not json", &mut app);
+        assert!(response.contains(r#""ok":false"#));
     }
 
     #[test]

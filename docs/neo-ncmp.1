@@ -37,6 +37,13 @@ object suitable for status bars.
 .TP
 .B remote \fIACTION\fR
 Control MPD without starting the TUI.
+.TP
+.B ipc \fICOMMAND\fR [\fIVALUE\fR]
+Send a JSON line over the running instance's private Unix socket. Commands:
+\fBping\fR, \fBstatus\fR, \fBscreen\fR, \fBsearch\fR, \fBaction\fR,
+\fBvolume\fR, \fBseek\fR, \fBplaylist\fR, and \fBnotify\fR. The socket
+defaults to \fI$XDG_RUNTIME_DIR/neo-ncmp/socket\fR and mode 0600; configure it
+with the \fB[ipc]\fR table.
 .SH REMOTE ACTIONS
 .TP
 .B play, pause, toggle, stop, next, previous
@@ -67,7 +74,8 @@ The default configuration file is
 .IR ~/.config/neo-ncmp/config.toml .
 See \fIconfig.example.toml\fR in the distribution for all sections
 (\fBmpd\fR, \fBui\fR, \fBlibrary\fR, \fBvisualizer\fR, \fBscrobbling\fR,
-\fBstats\fR, \fBkeys\fR, \fBtheme\fR).
+\fBstats\fR, \fBsearch\fR, \fBartwork\fR, \fBipc\fR, \fBkeys\fR,
+\fBtheme\fR).
 .SH KEYS
 .TP
 .B ?, :, /

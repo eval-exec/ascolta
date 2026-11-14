@@ -3,6 +3,7 @@ mod config;
 mod coverart;
 mod filter;
 mod input;
+mod ipc;
 mod logging;
 mod lyrics;
 mod mpd_worker;
@@ -20,10 +21,11 @@ mod widgets;
 
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use neo_ncmp_domain::{PlaybackState, format_duration};
 use neo_ncmp_mpd::MpdClient;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -67,6 +69,18 @@ enum Command {
     Remote {
         #[command(subcommand)]
         action: RemoteAction,
+    },
+
+    /// Talk to a running neo-ncmp instance over its Unix socket.
+    ///
+    /// Examples: `neo-ncmp ipc status`, `neo-ncmp ipc screen library`,
+    /// `neo-ncmp ipc search "artist:portishead"`.
+    Ipc {
+        /// Command: ping, status, screen, search, action, volume, seek,
+        /// playlist, notify.
+        command: String,
+        /// String or number argument for the command.
+        value: Option<String>,
     },
 }
 
@@ -145,6 +159,7 @@ async fn main() -> Result<()> {
         Some(Command::Check) => check(&config).await,
         Some(Command::Status { json }) => print_status(&config, json).await,
         Some(Command::Remote { action }) => remote(&config, action).await,
+        Some(Command::Ipc { command, value }) => ipc_request(&config, &command, value).await,
         None if cli.check => check(&config).await,
         None => {
             let mouse = config.ui.mouse;
@@ -164,6 +179,39 @@ async fn main() -> Result<()> {
             result
         }
     }
+}
+
+async fn ipc_request(config: &config::Config, command: &str, value: Option<String>) -> Result<()> {
+    let path = config.ipc.socket_path();
+    let mut stream = tokio::net::UnixStream::connect(&path)
+        .await
+        .with_context(|| format!("neo-ncmp is not running at {}", path.display()))?;
+    let value = value.map(serde_json::Value::String).unwrap_or_default();
+    let request = serde_json::json!({ "command": command, "value": value });
+    stream
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .context("could not send IPC request")?;
+    let mut response = String::new();
+    tokio::io::BufReader::new(stream)
+        .read_line(&mut response)
+        .await
+        .context("could not read IPC response")?;
+    print!("{response}");
+    if !response.trim().is_empty() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(response.trim()).context("invalid IPC response from neo-ncmp")?;
+        if parsed.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+            bail!(
+                "{}",
+                parsed
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("IPC command failed")
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn connect(config: &config::Config) -> Result<MpdClient> {

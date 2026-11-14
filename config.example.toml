@@ -56,6 +56,12 @@ online = false
 # "90s" = "year:1990-1999"
 # "Favourites" = "artist:portishead album:dummy"
 
+[ipc]
+# Per-user Unix socket for app-specific commands (mode 0600). Use `path` if
+# the default runtime-directory path is unsuitable.
+enabled = true
+# path = "/run/user/1000/neo-ncmp/socket"
+
 [scrobbling]
 # Disabled by default. Tokens can also come from environment variables:
 # NEO_NCMP_LISTENBRAINZ_TOKEN, NEO_NCMP_LASTFM_API_KEY,

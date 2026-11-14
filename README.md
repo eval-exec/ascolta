@@ -53,6 +53,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Real-time spectrum visualizer from an MPD FIFO output or PipeWire monitor capture
 - Tag editor with full-file backups and confirmation before writing
 - Remote CLI and machine-readable `status --json` for status bars
+- Unix-socket IPC for app-specific control (switch screens, open searches, inspect state)
 - Configurable keymap (global + per-screen overrides) and theme colors
 - Config hot reload: edits to `config.toml` apply theme and keybindings immediately
 - Opt-in mouse support: wheel scrolling, clickable screen tabs, row selection, double-click to play
@@ -100,6 +101,25 @@ neo-ncmp remote playlist "Late Night"
 neo-ncmp remote output 0 on
 neo-ncmp remote status --json
 ```
+
+While the TUI is running, app-specific commands go through its private Unix
+socket (`$XDG_RUNTIME_DIR/neo-ncmp/socket`, mode 0600):
+
+```sh
+neo-ncmp ipc ping
+neo-ncmp ipc status                 # JSON with the current screen, song, queue length
+neo-ncmp ipc screen library         # queue, library, playlists, outputs, stats,
+                                    # lyrics, visualizer, tags, history, browser
+neo-ncmp ipc action next_track      # any keymap action name
+neo-ncmp ipc search "artist:portishead year:>=1990"
+neo-ncmp ipc volume 65
+neo-ncmp ipc seek 42.5
+neo-ncmp ipc playlist "Late Night"  # replace queue and play
+neo-ncmp ipc notify "hello"
+```
+
+Disable the listener with `[ipc] enabled = false`, or choose another path with
+`[ipc] path`. Stale sockets from a crashed instance are reclaimed on start.
 
 Global flags (`--host`, `--port`, `--config`) work before or after subcommands.
 

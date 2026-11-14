@@ -16,6 +16,7 @@ pub struct Config {
     pub stats: StatsConfig,
     pub search: SearchConfig,
     pub artwork: ArtworkConfig,
+    pub ipc: IpcConfig,
     /// `[keys.<context>]` tables: key spec -> action name.
     pub keys: HashMap<String, HashMap<String, String>>,
     pub theme: ThemeConfig,
@@ -129,6 +130,30 @@ impl ScrobblingConfig {
             && !self.lastfm_api_key.is_empty()
             && !self.lastfm_api_secret.is_empty()
             && !self.lastfm_session_key.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct IpcConfig {
+    /// Listen on a per-user Unix socket for app-specific commands.
+    pub enabled: bool,
+    /// Override the default runtime-directory socket path.
+    pub path: Option<PathBuf>,
+}
+
+impl Default for IpcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: None,
+        }
+    }
+}
+
+impl IpcConfig {
+    pub fn socket_path(&self) -> PathBuf {
+        self.path.clone().unwrap_or_else(ipc_socket_path)
     }
 }
 
@@ -257,6 +282,15 @@ pub fn default_config_path() -> Option<PathBuf> {
         .map(|dirs| dirs.config_dir().join("config.toml"))
 }
 
+/// Per-user runtime socket, private to the current user.
+pub fn ipc_socket_path() -> PathBuf {
+    ProjectDirs::from("dev", "eval-exec", "neo-ncmp")
+        .and_then(|dirs| dirs.runtime_dir().map(|dir| dir.join("socket")))
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("neo-ncmp-{}.sock", unsafe { libc::getuid() }))
+        })
+}
+
 pub fn cache_dir() -> Option<PathBuf> {
     ProjectDirs::from("dev", "eval-exec", "neo-ncmp").map(|dirs| dirs.cache_dir().to_path_buf())
 }
@@ -312,6 +346,10 @@ mod tests {
             [search.saved]
             "90s" = "year:1990-1999"
 
+            [ipc]
+            enabled = false
+            path = "/tmp/neo-ncmp-test.sock"
+
             [theme]
             accent = '#ff00ff'
             "#,
@@ -329,6 +367,11 @@ mod tests {
         assert_eq!(
             config.search.saved.get("90s").map(String::as_str),
             Some("year:1990-1999")
+        );
+        assert!(!config.ipc.enabled);
+        assert_eq!(
+            config.ipc.socket_path(),
+            std::path::PathBuf::from("/tmp/neo-ncmp-test.sock")
         );
         assert!(config.scrobbling.listenbrainz_enabled());
         assert!(!config.scrobbling.lastfm_enabled());

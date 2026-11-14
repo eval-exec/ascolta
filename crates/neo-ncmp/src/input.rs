@@ -347,7 +347,7 @@ fn parse_chord(spec: &str) -> Result<KeyChord, String> {
     Ok(KeyChord { code, modifiers })
 }
 
-fn parse_action(spec: &str) -> Result<Action, String> {
+pub(crate) fn parse_action(spec: &str) -> Result<Action, String> {
     let spec = spec.trim();
     let lower = spec.to_ascii_lowercase();
     if let Some(screen) = lower

@@ -162,6 +162,10 @@ pub enum Msg {
         uri: String,
         picture: Option<Picture>,
     },
+    Ipc {
+        line: String,
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
     Lyrics {
         uri: String,
         doc: Option<LyricsDoc>,
