@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = ["crates/neo-ncmp", "crates/neo-ncmp-domain", "crates/neo-ncmp-mpd"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/eval-exec/neo-ncmp"
+
+[workspace.dependencies]
+neo-ncmp-domain = { path = "crates/neo-ncmp-domain" }
+neo-ncmp-mpd = { path = "crates/neo-ncmp-mpd" }
+
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "sync",
+    "time",
+    "signal",
+    "io-util",
+] }
+thiserror = "2"
+tracing = "0.1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

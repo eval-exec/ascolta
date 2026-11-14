@@ -1,0 +1,20 @@
+# Copy to ~/.config/neo-ncmp/config.toml
+
+[mpd]
+host = "127.0.0.1"
+port = 6600
+
+# MPD servers configured with `password_file` need this. It is sent on every
+# connection (command, idle, and library-loading connections).
+# password = "secret"
+
+[ui]
+# Event loop tick. Also controls how often the progress bar interpolates and
+# how frequently status is refreshed while playing.
+tick_rate_ms = 250
+
+# queue | library | outputs | stats
+start_screen = "queue"
+
+# Move the queue cursor to the playing song as tracks change.
+follow_now_playing = false
