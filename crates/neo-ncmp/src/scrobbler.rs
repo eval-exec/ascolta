@@ -255,6 +255,79 @@ async fn send_lastfm(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct TokenResponse {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionResponse {
+    session: LastFmSession,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LastFmSession {
+    pub name: String,
+    pub key: String,
+}
+
+async fn lastfm_call(
+    mut params: BTreeMap<String, String>,
+    secret: &str,
+) -> Result<serde_json::Value> {
+    let signature = lastfm_signature(&params, secret);
+    params.insert("api_sig".into(), signature);
+    params.insert("format".into(), "json".into());
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("could not create Last.fm client")?;
+    let response = client
+        .post(LASTFM_URL)
+        .form(&params)
+        .send()
+        .await
+        .context("Last.fm request failed")?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        bail!("Last.fm returned {status}");
+    }
+    if let Some(code) = body.get("error") {
+        bail!(
+            "Last.fm error {code}: {}",
+            body.get("message")
+                .and_then(|message| message.as_str())
+                .unwrap_or("unknown error")
+        );
+    }
+    Ok(body)
+}
+
+/// Starts the desktop auth flow by fetching a request token.
+pub async fn lastfm_request_token(api_key: &str, secret: &str) -> Result<String> {
+    let mut params = BTreeMap::new();
+    params.insert("method".into(), "auth.getToken".into());
+    params.insert("api_key".into(), api_key.into());
+    let body = lastfm_call(params, secret).await?;
+    let token: TokenResponse =
+        serde_json::from_value(body).context("unexpected Last.fm token response")?;
+    Ok(token.token)
+}
+
+/// Exchanges an authorized request token for a long-lived session key.
+pub async fn lastfm_session(api_key: &str, secret: &str, token: &str) -> Result<LastFmSession> {
+    let mut params = BTreeMap::new();
+    params.insert("method".into(), "auth.getSession".into());
+    params.insert("api_key".into(), api_key.into());
+    params.insert("token".into(), token.into());
+    let body = lastfm_call(params, secret).await?;
+    let session: SessionResponse =
+        serde_json::from_value(body).context("unexpected Last.fm session response")?;
+    Ok(session.session)
+}
+
 /// MD5 over alphabetically sorted `keyvalue` pairs, followed by the secret.
 pub fn lastfm_signature(params: &BTreeMap<String, String>, secret: &str) -> String {
     let mut input = String::new();
@@ -453,6 +526,19 @@ mod tests {
         let expected = hex_digest(&Md5::digest(b"a1b2secret"));
         assert_eq!(lastfm_signature(&params, "secret"), expected);
         assert_eq!(lastfm_signature(&params, "secret").len(), 32);
+    }
+
+    #[test]
+    fn parses_lastfm_auth_responses() {
+        let token: TokenResponse = serde_json::from_str(r#"{"token":"request-token"}"#).unwrap();
+        assert_eq!(token.token, "request-token");
+
+        let session: SessionResponse = serde_json::from_str(
+            r#"{"session":{"name":"listener","key":"session-key","subscriber":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(session.session.name, "listener");
+        assert_eq!(session.session.key, "session-key");
     }
 
     #[test]

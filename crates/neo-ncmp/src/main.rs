@@ -91,6 +91,10 @@ enum Command {
 
     /// Generate shell completions on stdout.
     Completions { shell: clap_complete::Shell },
+
+    /// Authorize Last.fm in a browser and print a session key.
+    #[command(name = "lastfm-auth")]
+    LastfmAuth,
 }
 
 #[derive(Debug, Subcommand)]
@@ -194,6 +198,7 @@ async fn main() -> Result<()> {
             clap_complete::generate(shell, &mut command, "neo-ncmp", &mut std::io::stdout());
             Ok(())
         }
+        Some(Command::LastfmAuth) => lastfm_auth(&config).await,
         None if cli.check => check(&config).await,
         None => {
             let mouse = config.ui.mouse;
@@ -213,6 +218,37 @@ async fn main() -> Result<()> {
             result
         }
     }
+}
+
+async fn lastfm_auth(config: &config::Config) -> Result<()> {
+    let api_key = config.scrobbling.lastfm_api_key.trim();
+    let secret = config.scrobbling.lastfm_api_secret.trim();
+    if api_key.is_empty() || secret.is_empty() {
+        bail!(
+            "set [scrobbling] lastfm_api_key and lastfm_api_secret first \
+             (or NEO_NCMP_LASTFM_API_KEY / NEO_NCMP_LASTFM_API_SECRET)"
+        );
+    }
+    let token = scrobbler::lastfm_request_token(api_key, secret).await?;
+    let url = format!("https://www.last.fm/api/auth/?api_key={api_key}&token={token}");
+    println!("Authorize neo-ncmp here:\n  {url}");
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    }
+    println!("Press Enter after authorizing in the browser…");
+    let mut line = String::new();
+    tokio::io::BufReader::new(tokio::io::stdin())
+        .read_line(&mut line)
+        .await?;
+    let session = scrobbler::lastfm_session(api_key, secret, &token).await?;
+    println!("Authenticated as {}.", session.name);
+    println!(
+        "Add this to config.toml (or set NEO_NCMP_LASTFM_SESSION_KEY):\n\n\
+[scrobbling]\nlastfm_session_key = \"{}\"",
+        session.key
+    );
+    Ok(())
 }
 
 async fn scrobble_command(config: &config::Config, action: ScrobbleAction) -> Result<()> {

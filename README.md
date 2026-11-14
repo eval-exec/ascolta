@@ -51,6 +51,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - MPRIS server: media keys, `playerctl`, desktop widgets; released cleanly on exit
 - Desktop notifications on track change
 - ListenBrainz and Last.fm scrobbling with an inspectable offline queue, manual retry, and entry removal
+- Last.fm browser auth helper (`neo-ncmp lastfm-auth`) that prints a session key
 - Real-time spectrum visualizer from an MPD FIFO output or PipeWire monitor capture
 - Tag editor with full-file backups and confirmation before writing
 - Remote CLI and machine-readable `status --json` for status bars
@@ -291,6 +292,11 @@ lastfm_session_key = "…"
 ListenBrainz `playing_now` is sent when a track starts; a scrobble is sent after
 half the track or four minutes, whichever comes first. Failed scrobbles are queued
 in `~/.local/state/neo-ncmp/scrobble-queue.jsonl` and retried on the next start.
+
+For Last.fm, put the API key/secret in `[scrobbling]`, then run
+`neo-ncmp lastfm-auth`. It opens the authorization page, waits for Enter, and
+prints the `lastfm_session_key` to add to the config (or export as
+`NEO_NCMP_LASTFM_SESSION_KEY`).
 
 ### Visualizer
 

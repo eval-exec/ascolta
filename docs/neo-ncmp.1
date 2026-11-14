@@ -41,6 +41,11 @@ Control MPD without starting the TUI.
 .B completions \fISHELL\fR
 Write shell completions to stdout (bash, zsh, fish, elvish, powershell).
 .TP
+.B lastfm-auth
+Fetch a Last.fm request token, open the authorization page, and exchange it for
+a session key to paste into \fB[scrobbling] lastfm_session_key\fR. Requires an
+API key and secret.
+.TP
 .B ipc \fICOMMAND\fR [\fIVALUE\fR]
 Send a JSON line over the running instance's private Unix socket. Commands:
 \fBping\fR, \fBstatus\fR, \fBscreen\fR, \fBsearch\fR, \fBaction\fR,
