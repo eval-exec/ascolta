@@ -37,6 +37,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Library-wide fuzzy search (`/`) using `nucleo-matcher`, run on a coalescing worker
 - Structured search filters: `artist:`, `album:`, `title:`, `genre:`, `format:`, `year:>=1990`, `-genre:rock`
 - Saved smart playlists: named filter queries in the palette, with play-all/enqueue-all
+- Persisted search history with `Ctrl-P` / `Ctrl-N` recall
 - Stored playlists: browse, load/play, append, save queue as, rename, delete, edit songs
 - Command palette (`:`) for every global action
 - Session restore: last screen, cursors, playlists pane, lyrics offset
@@ -191,6 +192,7 @@ Defaults match ncmpcpp where practical. Every binding is overridable under
 | `a` / `A` (browser) | Enqueue / replace queue and play |
 | `Enter` (outputs) | Toggle output |
 | `Ctrl-A` / `Ctrl-R` (search) | Enqueue all / replace queue with all results |
+| `Ctrl-P` / `Ctrl-N` (search) | Previous / next search-history entry |
 | Mouse (opt-in) | Wheel scrolls; click tabs/rows; double-click plays or edits |
 | `R` | Reload state/library (or History/Browser) |
 
@@ -216,7 +218,9 @@ artist:portishead album:"third" year:>=2008 -genre:rock sour
 Prefix any filter with `-` to exclude matches (`-genre:rock`). Quote values that
 contain spaces. Unknown fields and unparseable years stay ordinary fuzzy terms.
 Inside the search overlay, `Ctrl-A` enqueues every displayed result and `Ctrl-R`
-replaces the queue with them and starts playback.
+replaces the queue with them and starts playback. Closed queries are remembered
+(newest last, deduplicated, 20 entries) and restored across runs; `Ctrl-P` and
+`Ctrl-N` walk that history, returning to the draft query at the end.
 
 Saved queries live under `[search.saved]` and appear in the command palette (`:`)
 as smart playlists:

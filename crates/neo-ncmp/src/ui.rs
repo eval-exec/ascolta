@@ -1799,7 +1799,7 @@ fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "Enter play · Ctrl-A enqueue all · Ctrl-R play all · filters: artist: year: · Esc close",
+            "Enter play · ^A enqueue · ^R play all · ^P/^N history · filters: artist: year: · Esc",
             dim_style(),
         ))),
         footer_area,

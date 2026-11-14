@@ -20,6 +20,8 @@ pub struct SessionState {
     pub playlist_pane: usize,
     pub history_cursor: usize,
     pub lyrics_offset_ms: i64,
+    /// Most recent search queries, newest last.
+    pub recent_searches: Vec<String>,
 }
 
 impl SessionState {
@@ -80,6 +82,7 @@ mod tests {
             playlist_pane: 1,
             history_cursor: 6,
             lyrics_offset_ms: -500,
+            recent_searches: vec!["artist:portishead".into(), "year:1990-1999".into()],
         };
         state.save_at(&path).unwrap();
         let loaded = SessionState::load_at(&path).unwrap();
@@ -87,6 +90,7 @@ mod tests {
         assert_eq!(loaded.queue_cursor, 7);
         assert_eq!(loaded.library_pane, 2);
         assert_eq!(loaded.lyrics_offset_ms, -500);
+        assert_eq!(loaded.recent_searches.len(), 2);
         let _ = std::fs::remove_dir_all(directory);
     }
 }

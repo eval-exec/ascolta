@@ -468,6 +468,9 @@ pub struct App {
     loaded_playlist: Option<String>,
 
     pub search: SearchState,
+    search_history: Vec<String>,
+    search_history_cursor: Option<usize>,
+    search_history_draft: String,
     pub search_index: Option<Arc<SearchIndex>>,
     search_handle: SearchHandle,
     search_generation: u64,
@@ -551,6 +554,9 @@ impl App {
             playlist_songs_view: ListView::default(),
             loaded_playlist: None,
             search: SearchState::default(),
+            search_history: Vec::new(),
+            search_history_cursor: None,
+            search_history_draft: String::new(),
             search_index: None,
             search_handle,
             search_generation: 0,
@@ -714,10 +720,14 @@ impl App {
     }
 
     pub fn restore_session(&mut self) {
+        let session = SessionState::load();
+        self.search_history = session.recent_searches;
+        if self.search_history.len() > 20 {
+            self.search_history.drain(..self.search_history.len() - 20);
+        }
         if !self.config.ui.restore_session {
             return;
         }
-        let session = SessionState::load();
         if let Some(name) = session.screen.as_deref() {
             self.screen = Screen::from_name(name);
         }
@@ -748,9 +758,6 @@ impl App {
     }
 
     fn save_session(&self) {
-        if !self.config.ui.restore_session {
-            return;
-        }
         let session = SessionState {
             screen: Some(self.screen.name().to_string()),
             queue_cursor: self.queue_view.cursor,
@@ -770,6 +777,7 @@ impl App {
             },
             history_cursor: self.history_cursor,
             lyrics_offset_ms: self.lyrics.offset_ms,
+            recent_searches: self.search_history.clone(),
         };
         session.save();
     }
@@ -1932,6 +1940,8 @@ impl App {
         tracing::debug!(items = index.len(), "opening search");
         self.search.open();
         self.search.query = query;
+        self.search_history_cursor = None;
+        self.search_history_draft.clear();
         self.request_search(index);
     }
 
@@ -1954,10 +1964,12 @@ impl App {
             match key.code {
                 KeyCode::Char('u') => {
                     self.search.query.clear();
+                    self.search_history_cursor = None;
+                    self.search_history_draft.clear();
                     self.refresh_search();
                 }
-                KeyCode::Char('n') => self.search.move_cursor(1),
-                KeyCode::Char('p') => self.search.move_cursor(-1),
+                KeyCode::Char('n') => self.search_history_next(),
+                KeyCode::Char('p') => self.search_history_prev(),
                 KeyCode::Char('a') => self.queue_all_search_results(false),
                 KeyCode::Char('r') => self.queue_all_search_results(true),
                 _ => {}
@@ -1966,7 +1978,7 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Esc => self.search.close(),
+            KeyCode::Esc => self.close_search(),
             KeyCode::Enter => self.play_search_selection(),
             KeyCode::Up => self.search.move_cursor(-1),
             KeyCode::Down => self.search.move_cursor(1),
@@ -1974,14 +1986,64 @@ impl App {
             KeyCode::PageDown => self.search.move_cursor(10),
             KeyCode::Backspace => {
                 self.search.query.pop();
+                self.search_history_cursor = None;
+                self.search_history_draft.clear();
                 self.refresh_search();
             }
             KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::ALT) => {
                 self.search.query.push(character);
+                self.search_history_cursor = None;
+                self.search_history_draft.clear();
                 self.refresh_search();
             }
             _ => {}
         }
+    }
+
+    fn close_search(&mut self) {
+        let query = self.search.query.trim();
+        if !query.is_empty() {
+            self.search_history.retain(|entry| entry != query);
+            self.search_history.push(query.to_string());
+            let excess = self.search_history.len().saturating_sub(20);
+            if excess > 0 {
+                self.search_history.drain(..excess);
+            }
+        }
+        self.search_history_cursor = None;
+        self.search_history_draft.clear();
+        self.search.close();
+    }
+
+    fn search_history_prev(&mut self) {
+        if self.search_history.is_empty() {
+            return;
+        }
+        let next = match self.search_history_cursor {
+            None => {
+                self.search_history_draft = self.search.query.clone();
+                self.search_history.len() - 1
+            }
+            Some(index) if index > 0 => index - 1,
+            Some(_) => return,
+        };
+        self.search_history_cursor = Some(next);
+        self.search.query = self.search_history[next].clone();
+        self.refresh_search();
+    }
+
+    fn search_history_next(&mut self) {
+        let Some(index) = self.search_history_cursor else {
+            return;
+        };
+        if index + 1 < self.search_history.len() {
+            self.search_history_cursor = Some(index + 1);
+            self.search.query = self.search_history[index + 1].clone();
+        } else {
+            self.search_history_cursor = None;
+            self.search.query = std::mem::take(&mut self.search_history_draft);
+        }
+        self.refresh_search();
     }
 
     /// Enqueues every URI represented by the current result set, deduplicated.
@@ -2010,7 +2072,7 @@ impl App {
         let count = uris.len();
         if replace {
             self.mpd.send(Command::ReplaceAndPlay(uris));
-            self.search.close();
+            self.close_search();
             self.toast_info(format!("Playing {count} track(s)"));
         } else {
             self.mpd.send(Command::AppendUris(uris));
@@ -2035,7 +2097,7 @@ impl App {
             return;
         }
         self.mpd.send(Command::AppendAndPlay(uris));
-        self.search.close();
+        self.close_search();
         self.toast_info("Playing search selection");
     }
 
@@ -3115,6 +3177,48 @@ mod tests {
 
         let response = crate::ipc::handle("not json", &mut app);
         assert!(response.contains(r#""ok":false"#));
+    }
+
+    #[test]
+    fn search_history_recalls_navigates_and_records_queries() {
+        let mut app = app();
+        app.search_history = vec!["first query".into(), "second query".into()];
+        app.search.active = true;
+        app.search.query = "draft".into();
+        let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+
+        app.on_key(ctrl(KeyCode::Char('p')));
+        assert_eq!(app.search.query, "second query");
+        app.on_key(ctrl(KeyCode::Char('p')));
+        assert_eq!(app.search.query, "first query");
+        app.on_key(ctrl(KeyCode::Char('p')));
+        assert_eq!(app.search.query, "first query");
+        app.on_key(ctrl(KeyCode::Char('n')));
+        assert_eq!(app.search.query, "second query");
+        app.on_key(ctrl(KeyCode::Char('n')));
+        assert_eq!(app.search.query, "draft");
+
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(app.search_history.last().map(String::as_str), Some("draft"));
+
+        app.search.active = true;
+        app.search.query = "first query".into();
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(
+            app.search_history,
+            vec!["second query", "draft", "first query"]
+        );
+
+        app.search_history = (0..20).map(|index| format!("query {index}")).collect();
+        app.search.active = true;
+        app.search.query = "new".into();
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(app.search_history.len(), 20);
+        assert_eq!(
+            app.search_history.first().map(String::as_str),
+            Some("query 1")
+        );
+        assert_eq!(app.search_history.last().map(String::as_str), Some("new"));
     }
 
     #[test]
