@@ -55,6 +55,7 @@ pub enum Action {
     LyricsLater,
     EditTag,
     SaveTags,
+    BrowserUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,6 +117,7 @@ impl Keymap {
         {
             global(&mut keymap, spec, Action::GotoScreen(index));
         }
+        global(&mut keymap, "0", Action::GotoScreen(9));
 
         for spec in ["j", "down"] {
             global(&mut keymap, spec, Action::MoveDown);
@@ -199,6 +201,12 @@ impl Keymap {
 
         screen(&mut keymap, Screen::TagEditor, "enter", Action::EditTag);
         screen(&mut keymap, Screen::TagEditor, "w", Action::SaveTags);
+
+        for spec in ["h", "left", "backspace"] {
+            screen(&mut keymap, Screen::Browser, spec, Action::BrowserUp);
+        }
+        screen(&mut keymap, Screen::Browser, "a", Action::EnqueueSelected);
+        screen(&mut keymap, Screen::Browser, "A", Action::ReplaceAndPlay);
 
         keymap
     }
@@ -393,6 +401,7 @@ fn parse_action(spec: &str) -> Result<Action, String> {
         "lyrics_later" => Action::LyricsLater,
         "edit_tag" => Action::EditTag,
         "save_tags" => Action::SaveTags,
+        "browser_up" => Action::BrowserUp,
         other => return Err(format!("unknown action {other:?}")),
     })
 }
@@ -408,6 +417,7 @@ fn parse_screen_name(value: &str) -> Result<Screen, String> {
         "visualizer" | "7" => Screen::Visualizer,
         "tags" | "tag-editor" | "tag editor" | "8" => Screen::TagEditor,
         "history" | "9" => Screen::History,
+        "browser" | "files" | "0" => Screen::Browser,
         other => return Err(format!("unknown screen {other:?}")),
     })
 }
@@ -548,6 +558,19 @@ mod tests {
             action(KeyCode::Char(':'), Screen::Queue),
             Some(Action::OpenPalette)
         );
+    }
+
+    #[test]
+    fn browser_keys() {
+        assert_eq!(
+            action(KeyCode::Char('0'), Screen::Queue),
+            Some(Action::GotoScreen(9))
+        );
+        assert_eq!(
+            action(KeyCode::Backspace, Screen::Browser),
+            Some(Action::BrowserUp)
+        );
+        assert_eq!(action(KeyCode::Backspace, Screen::Queue), None);
     }
 
     #[test]

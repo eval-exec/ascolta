@@ -40,3 +40,4 @@ lofty = "0.25"
 md-5 = "0.11.0"
 rusqlite = { version = "0.42.0", features = ["bundled"] }
 libc = "0.2.191"
+notify = "8.2.2"

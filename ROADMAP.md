@@ -38,18 +38,18 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 - [x] Desktop notifications on track change
 - [x] Remote CLI and JSON status for status bars/keybindings
 - [x] ListenBrainz and Last.fm scrobbling with threshold tracking and an offline queue
-- [x] Real-time visualizer: MPD FIFO PCM reader, real FFT, log-spaced bands,
-      peak-hold smoothing
+- [x] Real-time visualizer: MPD FIFO PCM reader or PipeWire monitor capture,
+      real FFT, log-spaced bands, peak-hold smoothing
 - [x] Tag editor: read/write tags with `lofty`, full-file backup before writes,
       confirmation, MPD rescan
+- [x] Directory-first file browser over MPD `lsinfo`: navigation, enqueue, replace+play
+- [x] Hot reload of config, theme, and keymap (file watcher)
 
 ## Next
 
 ### Parity / UI
 
-- [ ] File browser (`lsinfo`) for directory-first browsing
 - [ ] Structured filter DSL (`artist:`, `album:`, `year:>=1990`) and saved smart playlists
-- [ ] Hot reload of config, theme, and keymap (file watcher)
 - [ ] Multi-column configurable layout (beyond the built-in adaptive layout)
 - [ ] Mouse support (opt-in)
 - [ ] Search history and saved searches
@@ -57,7 +57,6 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 
 ### Integrations
 
-- [ ] PipeWire monitor capture as an alternative visualizer source (no MPD fifo)
 - [ ] Cover Art Archive/MusicBrainz fallback when embedded art is absent
 - [ ] Last.fm browser-auth flow and `lastfm-auth` helper
 - [ ] Unix-socket IPC for app-specific remote commands
@@ -81,8 +80,10 @@ Batch editing and an undo journal are future work.
 
 **Visualizer.** MPD's `fifo` output is the classic ncmpcpp approach but requires
 editing `mpd.conf` (on NixOS, the Nix module). `neo-ncmp` opens the FIFO at
-startup so MPD's output does not block. PipeWire monitor capture is the planned
-alternative.
+startup so MPD's output does not block. The `pipewire` source is the zero-config
+alternative: it resolves the default sink with `pw-metadata` and captures its
+monitor via `pw-record`, so other applications on the sink show up too. Set
+`[visualizer] target` to pin a specific sink.
 
 **Album art in tmux.** Kitty/Sixel passthrough needs `allow-passthrough` in tmux;
 otherwise `ratatui-image` falls back to halfblocks.

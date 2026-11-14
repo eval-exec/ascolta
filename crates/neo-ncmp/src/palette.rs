@@ -86,6 +86,10 @@ const ITEMS: &[PaletteItem] = &[
         action: Action::GotoScreen(8),
     },
     PaletteItem {
+        label: "Go to file browser",
+        action: Action::GotoScreen(9),
+    },
+    PaletteItem {
         label: "Search library",
         action: Action::OpenSearch,
     },

@@ -76,9 +76,12 @@ pub struct LibraryConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct VisualizerConfig {
-    /// Requires an MPD `fifo` audio output pointed at the same path.
+    /// `fifo` (requires an MPD fifo output) or `pipewire` (captures the default sink).
     pub enabled: bool,
+    pub source: String,
     pub fifo: PathBuf,
+    /// Optional PipeWire sink name; defaults to the current default sink.
+    pub target: Option<String>,
     pub sample_rate: u32,
     pub channels: u8,
     pub bits: u8,
@@ -89,7 +92,9 @@ impl Default for VisualizerConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            source: "fifo".into(),
             fifo: PathBuf::from("/tmp/mpd.fifo"),
+            target: None,
             sample_rate: 44_100,
             channels: 2,
             bits: 16,

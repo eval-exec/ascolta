@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo_ncmp_domain::{AudioFormat, MpdOutput, MpdStats, MpdStatus, PlaybackState, Song};
+use neo_ncmp_domain::{
+    AudioFormat, DirEntry, EntryKind, MpdOutput, MpdStats, MpdStatus, PlaybackState, Song,
+};
 
 use crate::protocol::Response;
 
@@ -10,6 +12,64 @@ use crate::protocol::Response;
 pub struct Playlist {
     pub name: Arc<str>,
     pub last_modified: Option<Arc<str>>,
+}
+
+/// Parses an `lsinfo` response into directories, playlists, and tagged files.
+pub fn entries(response: &Response) -> Vec<DirEntry> {
+    let mut entries = Vec::new();
+    let mut current: Option<Song> = None;
+
+    fn flush(entries: &mut Vec<DirEntry>, current: &mut Option<Song>) {
+        if let Some(song) = current.take() {
+            entries.push(DirEntry {
+                kind: EntryKind::File,
+                name: Arc::from(last_segment(&song.uri)),
+                uri: song.uri.clone(),
+                song: Some(song),
+            });
+        }
+    }
+
+    for (key, value) in response.pairs() {
+        match key.as_str() {
+            "file" => {
+                flush(&mut entries, &mut current);
+                current = Some(Song {
+                    uri: Arc::from(value.as_str()),
+                    ..Song::default()
+                });
+            }
+            "directory" => {
+                flush(&mut entries, &mut current);
+                entries.push(DirEntry {
+                    kind: EntryKind::Directory,
+                    uri: Arc::from(value.as_str()),
+                    name: Arc::from(last_segment(value)),
+                    song: None,
+                });
+            }
+            "playlist" => {
+                flush(&mut entries, &mut current);
+                entries.push(DirEntry {
+                    kind: EntryKind::Playlist,
+                    uri: Arc::from(value.as_str()),
+                    name: Arc::from(value.as_str()),
+                    song: None,
+                });
+            }
+            _ => {
+                if let Some(song) = &mut current {
+                    apply_tag(song, key, value);
+                }
+            }
+        }
+    }
+    flush(&mut entries, &mut current);
+    entries
+}
+
+fn last_segment(uri: &str) -> &str {
+    uri.rsplit('/').next().unwrap_or(uri)
 }
 
 pub fn songs(response: &Response) -> Vec<Song> {
@@ -216,6 +276,30 @@ mod tests {
         assert_eq!(songs[0].tags.len(), 1);
         assert_eq!(songs[0].tags[0].0.as_ref(), "MUSICBRAINZ_TRACKID");
         assert_eq!(songs[1].id, Some(8));
+    }
+
+    #[test]
+    fn parses_browser_entries() {
+        let response = response(&[
+            ("directory", "Albums"),
+            ("directory", "Live"),
+            ("playlist", "Late Night.m3u"),
+            ("file", "Albums/One/track.flac"),
+            ("Artist", "Portishead"),
+            ("directory", "Albums/Two"),
+        ]);
+        let entries = entries(&response);
+        assert_eq!(entries.len(), 5);
+        assert_eq!(entries[0].kind, EntryKind::Directory);
+        assert_eq!(entries[0].name.as_ref(), "Albums");
+        assert_eq!(entries[2].kind, EntryKind::Playlist);
+        assert_eq!(entries[3].kind, EntryKind::File);
+        assert_eq!(entries[3].name.as_ref(), "track.flac");
+        assert_eq!(
+            entries[3].song.as_ref().unwrap().artist.as_deref(),
+            Some("Portishead")
+        );
+        assert_eq!(entries[4].name.as_ref(), "Two");
     }
 
     #[test]

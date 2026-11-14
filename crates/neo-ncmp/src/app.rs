@@ -1,10 +1,12 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use neo_ncmp_domain::{
-    Album, Artist, Library, MpdOutput, MpdStats, MpdStatus, PlaybackState, Song,
+    Album, Artist, DirEntry, EntryKind, Library, MpdOutput, MpdStats, MpdStatus, PlaybackState,
+    Song,
 };
 use neo_ncmp_mpd::{Picture, Playlist, Subsystem};
 use ratatui::DefaultTerminal;
@@ -40,10 +42,11 @@ pub enum Screen {
     Visualizer,
     TagEditor,
     History,
+    Browser,
 }
 
 impl Screen {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Queue,
         Self::Library,
         Self::Playlists,
@@ -53,6 +56,7 @@ impl Screen {
         Self::Visualizer,
         Self::TagEditor,
         Self::History,
+        Self::Browser,
     ];
 
     pub fn index(self) -> usize {
@@ -66,6 +70,7 @@ impl Screen {
             Self::Visualizer => 6,
             Self::TagEditor => 7,
             Self::History => 8,
+            Self::Browser => 9,
         }
     }
 
@@ -80,6 +85,16 @@ impl Screen {
             Self::Visualizer => "Visualizer",
             Self::TagEditor => "Tags",
             Self::History => "History",
+            Self::Browser => "Browser",
+        }
+    }
+
+    /// The number shown in the header and used by the number keys.
+    pub fn key_number(self) -> usize {
+        if self == Self::Browser {
+            0
+        } else {
+            self.index() + 1
         }
     }
 
@@ -94,6 +109,7 @@ impl Screen {
             Self::Visualizer => "visualizer",
             Self::TagEditor => "tags",
             Self::History => "history",
+            Self::Browser => "browser",
         }
     }
 
@@ -115,6 +131,7 @@ impl Screen {
             "visualizer" => Self::Visualizer,
             "tags" | "tag-editor" | "tag editor" => Self::TagEditor,
             "history" => Self::History,
+            "browser" | "files" | "file browser" => Self::Browser,
             _ => Self::Queue,
         }
     }
@@ -276,6 +293,14 @@ impl TagEditorState {
 }
 
 #[derive(Debug, Default)]
+pub struct BrowserState {
+    pub uri: Option<String>,
+    pub entries: Vec<DirEntry>,
+    pub view: ListView,
+    pub loading: bool,
+}
+
+#[derive(Debug, Default)]
 pub struct LyricsView {
     pub doc: Option<LyricsDoc>,
     pub uri: Option<Arc<str>>,
@@ -369,6 +394,16 @@ impl PlaybackScrobble {
     }
 }
 
+pub struct AppDeps {
+    pub mpd: MpdHandle,
+    pub search_handle: SearchHandle,
+    pub picker: Picker,
+    pub mpris_tx: watch::Sender<MprisSnapshot>,
+    pub scrobbler: Option<ScrobbleHandle>,
+    pub event_tx: mpsc::UnboundedSender<Msg>,
+    pub config_path: Option<PathBuf>,
+}
+
 pub struct App {
     pub config: Config,
     pub mpd: MpdHandle,
@@ -413,9 +448,13 @@ pub struct App {
     pub history_error: Option<String>,
     pub history_cursor: usize,
 
+    pub browser: BrowserState,
+
     scrobbler: Option<ScrobbleHandle>,
     scrobble: Option<PlaybackScrobble>,
     event_tx: mpsc::UnboundedSender<Msg>,
+    config_path: Option<PathBuf>,
+    config_reload_at: Option<Instant>,
 
     mpris_tx: watch::Sender<MprisSnapshot>,
 
@@ -439,15 +478,16 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(
-        config: Config,
-        mpd: MpdHandle,
-        search_handle: SearchHandle,
-        picker: Picker,
-        mpris_tx: watch::Sender<MprisSnapshot>,
-        scrobbler: Option<ScrobbleHandle>,
-        event_tx: mpsc::UnboundedSender<Msg>,
-    ) -> Self {
+    pub fn new(config: Config, deps: AppDeps) -> Self {
+        let AppDeps {
+            mpd,
+            search_handle,
+            picker,
+            mpris_tx,
+            scrobbler,
+            event_tx,
+            config_path,
+        } = deps;
         let keymap = Keymap::from_config(&config.keys);
         Self {
             screen: Screen::from_name(&config.ui.start_screen),
@@ -483,9 +523,12 @@ impl App {
             history_loading: false,
             history_error: None,
             history_cursor: 0,
+            browser: BrowserState::default(),
             scrobbler,
             scrobble: None,
             event_tx,
+            config_path,
+            config_reload_at: None,
             mpris_tx,
             cover_protocol: None,
             picker,
@@ -505,7 +548,11 @@ impl App {
         }
     }
 
-    pub async fn run(config: Config, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
+    pub async fn run(
+        config: Config,
+        config_path: Option<PathBuf>,
+        terminal: &mut DefaultTerminal,
+    ) -> anyhow::Result<()> {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let endpoint = mpd_worker::Endpoint::new(config.mpd_addr(), config.mpd.password.clone());
         let mpd = mpd_worker::spawn(endpoint.clone(), tx.clone());
@@ -514,6 +561,8 @@ impl App {
         if config.visualizer.enabled {
             visualizer::spawn(
                 config.visualizer.fifo.clone(),
+                &config.visualizer.source,
+                config.visualizer.target.clone(),
                 visualizer::AudioSpec {
                     sample_rate: config.visualizer.sample_rate,
                     channels: config.visualizer.channels,
@@ -538,14 +587,20 @@ impl App {
         });
 
         ui::apply_theme(&config.theme);
+        if let Some(path) = &config_path {
+            spawn_config_watcher(path.clone(), tx.clone());
+        }
         let mut app = App::new(
             config.clone(),
-            mpd,
-            search_handle,
-            picker,
-            mpris_tx,
-            scrobbler,
-            tx.clone(),
+            AppDeps {
+                mpd,
+                search_handle,
+                picker,
+                mpris_tx,
+                scrobbler,
+                event_tx: tx.clone(),
+                config_path,
+            },
         );
         app.restore_session();
         let mut events = EventStream::new();
@@ -625,6 +680,7 @@ impl App {
             Screen::History => self.load_history(),
             Screen::Lyrics => self.request_lyrics(false),
             Screen::TagEditor => self.load_tag_editor(),
+            Screen::Browser => self.load_browser(self.browser.uri.clone()),
             _ => {}
         }
     }
@@ -840,6 +896,25 @@ impl App {
                     self.spectrum.clear();
                 }
             }
+            Msg::ConfigFileChanged => {
+                self.config_reload_at = Some(Instant::now() + Duration::from_millis(250));
+            }
+            Msg::Browser { uri, entries } => {
+                if self.browser.uri == uri {
+                    let mut entries = entries;
+                    entries.sort_by_key(|entry| {
+                        let rank = match entry.kind {
+                            EntryKind::Directory => 0,
+                            EntryKind::Playlist => 1,
+                            EntryKind::File => 2,
+                        };
+                        (rank, entry.name.to_lowercase())
+                    });
+                    self.browser.entries = entries;
+                    self.browser.loading = false;
+                    self.browser.view.clamp(self.browser.entries.len());
+                }
+            }
             Msg::History(report) => {
                 self.history_cursor = self
                     .history_cursor
@@ -901,6 +976,14 @@ impl App {
 
         if self.toast.as_ref().is_some_and(Toast::expired) {
             self.toast = None;
+        }
+
+        if self
+            .config_reload_at
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.config_reload_at = None;
+            self.reload_config();
         }
 
         if self
@@ -983,6 +1066,8 @@ impl App {
             Action::Refresh => {
                 if self.screen == Screen::History {
                     self.load_history();
+                } else if self.screen == Screen::Browser {
+                    self.load_browser(self.browser.uri.clone());
                 } else {
                     self.mpd.send(Command::RefreshAll);
                     self.toast_info("Refreshing…");
@@ -1020,6 +1105,7 @@ impl App {
             Action::PaneLeft => self.change_pane(-1),
             Action::PaneRight => self.change_pane(1),
             Action::ToggleOutput => self.toggle_output(),
+            Action::BrowserUp => self.browser_up(),
             Action::ReloadLyrics => self.request_lyrics(true),
             Action::LyricsEarlier => self.adjust_lyrics_offset(-500),
             Action::LyricsLater => self.adjust_lyrics_offset(500),
@@ -1045,6 +1131,55 @@ impl App {
             single: self.status.as_ref().is_some_and(|status| status.single),
         };
         let _ = self.mpris_tx.send(snapshot);
+    }
+
+    fn load_browser(&mut self, uri: Option<String>) {
+        self.browser.uri = uri.clone();
+        self.browser.loading = true;
+        self.browser.entries.clear();
+        self.browser.view.reset();
+        self.mpd.send(Command::Browse(uri));
+    }
+
+    fn browser_up(&mut self) {
+        let Some(current) = self.browser.uri.clone() else {
+            return;
+        };
+        let parent = current
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_string())
+            .filter(|parent| !parent.is_empty());
+        self.load_browser(parent);
+    }
+
+    fn browser_enter(&mut self) {
+        let Some(entry) = self.browser.entries.get(self.browser.view.cursor).cloned() else {
+            return;
+        };
+        match entry.kind {
+            EntryKind::Directory => self.load_browser(Some(entry.uri.to_string())),
+            EntryKind::Playlist => self.mpd.send(Command::LoadPlaylist {
+                name: entry.uri.to_string(),
+                replace: true,
+            }),
+            EntryKind::File => self
+                .mpd
+                .send(Command::AppendAndPlay(vec![entry.uri.to_string()])),
+        }
+    }
+
+    fn browser_enqueue(&mut self) {
+        let Some(entry) = self.browser.entries.get(self.browser.view.cursor) else {
+            return;
+        };
+        match entry.kind {
+            EntryKind::Playlist => self
+                .mpd
+                .send(Command::AppendPlaylist(entry.uri.to_string())),
+            EntryKind::Directory | EntryKind::File => {
+                self.mpd.send(Command::AppendUri(entry.uri.to_string()))
+            }
+        }
     }
 
     fn load_history(&mut self) {
@@ -1416,6 +1551,10 @@ impl App {
             Screen::Lyrics => self.request_lyrics(false),
             Screen::TagEditor => self.load_tag_editor(),
             Screen::History => self.load_history(),
+            Screen::Browser if self.browser.entries.is_empty() && !self.browser.loading => {
+                self.load_browser(self.browser.uri.clone());
+            }
+            Screen::Browser => {}
             Screen::Outputs => self.mpd.send(Command::RefreshOutputs),
             Screen::Stats => self.mpd.send(Command::RefreshStats),
             _ => {}
@@ -1440,6 +1579,7 @@ impl App {
                     .saturating_add_signed(delta)
                     .min(len.saturating_sub(1));
             }
+            Screen::Browser => self.browser.view.move_by(delta, self.browser.entries.len()),
             Screen::TagEditor => {
                 let len = self.tag_editor.fields.len();
                 self.tag_editor.cursor = self
@@ -1474,6 +1614,10 @@ impl App {
                     .saturating_add_signed(direction.saturating_mul(PAGE as isize))
                     .min(len.saturating_sub(1));
             }
+            Screen::Browser => self
+                .browser
+                .view
+                .page(direction, self.browser.entries.len(), PAGE),
             Screen::TagEditor => {
                 let len = self.tag_editor.fields.len();
                 self.tag_editor.cursor = self
@@ -1564,6 +1708,13 @@ impl App {
                     .as_ref()
                     .map_or(0, |report| report.top_songs.len());
                 self.history_cursor = if last { len.saturating_sub(1) } else { 0 };
+            }
+            Screen::Browser => {
+                if last {
+                    self.browser.view.last(self.browser.entries.len());
+                } else {
+                    self.browser.view.first();
+                }
             }
             Screen::TagEditor => {
                 self.tag_editor.cursor = if last {
@@ -1692,6 +1843,7 @@ impl App {
                 }
             }
             Screen::Playlists => self.play_playlist_selection(),
+            Screen::Browser => self.browser_enter(),
             Screen::Outputs => self.toggle_output(),
             Screen::History => {
                 if let Some(report) = &self.history
@@ -1733,6 +1885,8 @@ impl App {
             }
         } else if self.screen == Screen::Playlists {
             self.enqueue_playlist_selection();
+        } else if self.screen == Screen::Browser {
+            self.browser_enqueue();
         }
     }
 
@@ -1754,6 +1908,21 @@ impl App {
     }
 
     fn replace_and_play(&mut self) {
+        if self.screen == Screen::Browser {
+            let Some(entry) = self.browser.entries.get(self.browser.view.cursor) else {
+                return;
+            };
+            match entry.kind {
+                EntryKind::Playlist => self.mpd.send(Command::LoadPlaylist {
+                    name: entry.uri.to_string(),
+                    replace: true,
+                }),
+                EntryKind::Directory | EntryKind::File => self
+                    .mpd
+                    .send(Command::ReplaceWithUri(entry.uri.to_string())),
+            }
+            return;
+        }
         if self.screen != Screen::Library {
             return;
         }
@@ -2110,6 +2279,27 @@ impl App {
         self.library_view.songs.clamp(self.library_song_count());
     }
 
+    fn reload_config(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        match Config::load(Some(&path)) {
+            Ok(config) => {
+                let connection_changed = config.mpd_addr() != self.config.mpd_addr()
+                    || config.mpd.password != self.config.mpd.password;
+                ui::apply_theme(&config.theme);
+                self.keymap = Keymap::from_config(&config.keys);
+                self.config = config;
+                if connection_changed {
+                    self.toast_info("Config reloaded — restart to change MPD connection");
+                } else {
+                    self.toast_success("Configuration reloaded");
+                }
+            }
+            Err(error) => self.toast_error(format!("Config reload failed: {error}")),
+        }
+    }
+
     fn toast_info(&mut self, message: impl Into<String>) {
         self.toast = Some(Toast {
             message: message.into(),
@@ -2135,6 +2325,48 @@ impl App {
     }
 }
 
+fn spawn_config_watcher(path: PathBuf, tx: mpsc::UnboundedSender<Msg>) {
+    std::thread::spawn(move || {
+        use notify::{RecursiveMode, Watcher};
+        let path = std::path::absolute(&path).unwrap_or(path);
+        let Some(directory) = path.parent() else {
+            return;
+        };
+        if let Err(error) = std::fs::create_dir_all(directory) {
+            tracing::warn!(%error, "could not create config directory");
+            return;
+        }
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let mut watcher = match notify::recommended_watcher(move |result| {
+            let _ = event_tx.send(result);
+        }) {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                tracing::warn!(%error, "could not create config watcher");
+                return;
+            }
+        };
+        if let Err(error) = watcher.watch(directory, RecursiveMode::NonRecursive) {
+            tracing::warn!(
+                %error,
+                directory = %directory.display(),
+                "could not watch config directory"
+            );
+            return;
+        }
+        for result in event_rx {
+            let Ok(event) = result else {
+                continue;
+            };
+            if event.paths.iter().any(|candidate| candidate == &path)
+                && tx.send(Msg::ConfigFileChanged).is_err()
+            {
+                return;
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2148,12 +2380,15 @@ mod tests {
     fn app() -> App {
         App::new(
             test_config(),
-            MpdHandle::test_handle(),
-            SearchHandle::test_handle(),
-            Picker::halfblocks(),
-            watch::channel(MprisSnapshot::default()).0,
-            None,
-            mpsc::unbounded_channel().0,
+            AppDeps {
+                mpd: MpdHandle::test_handle(),
+                search_handle: SearchHandle::test_handle(),
+                picker: Picker::halfblocks(),
+                mpris_tx: watch::channel(MprisSnapshot::default()).0,
+                scrobbler: None,
+                event_tx: mpsc::unbounded_channel().0,
+                config_path: None,
+            },
         )
     }
 
@@ -2162,12 +2397,15 @@ mod tests {
         (
             App::new(
                 test_config(),
-                mpd,
-                SearchHandle::test_handle(),
-                Picker::halfblocks(),
-                watch::channel(MprisSnapshot::default()).0,
-                None,
-                mpsc::unbounded_channel().0,
+                AppDeps {
+                    mpd,
+                    search_handle: SearchHandle::test_handle(),
+                    picker: Picker::halfblocks(),
+                    mpris_tx: watch::channel(MprisSnapshot::default()).0,
+                    scrobbler: None,
+                    event_tx: mpsc::unbounded_channel().0,
+                    config_path: None,
+                },
             ),
             receiver,
         )
@@ -2180,12 +2418,13 @@ mod tests {
     #[test]
     fn screens_cycle_both_ways() {
         assert_eq!(Screen::Queue.next(), Screen::Library);
-        assert_eq!(Screen::Queue.previous(), Screen::History);
+        assert_eq!(Screen::Queue.previous(), Screen::Browser);
         assert_eq!(Screen::Stats.next(), Screen::Lyrics);
         assert_eq!(Screen::Lyrics.next(), Screen::Visualizer);
         assert_eq!(Screen::Visualizer.next(), Screen::TagEditor);
         assert_eq!(Screen::TagEditor.next(), Screen::History);
-        assert_eq!(Screen::History.next(), Screen::Queue);
+        assert_eq!(Screen::History.next(), Screen::Browser);
+        assert_eq!(Screen::Browser.next(), Screen::Queue);
         assert_eq!(Screen::from_name("LIBRARY"), Screen::Library);
         assert_eq!(Screen::from_name("nonsense"), Screen::Queue);
     }
@@ -2712,12 +2951,15 @@ mod tests {
         let (mpd, _commands) = MpdHandle::test_channel();
         let mut app = App::new(
             test_config(),
-            mpd,
-            SearchHandle::test_handle(),
-            Picker::halfblocks(),
-            watch::channel(MprisSnapshot::default()).0,
-            Some(scrobbler),
-            mpsc::unbounded_channel().0,
+            AppDeps {
+                mpd,
+                search_handle: SearchHandle::test_handle(),
+                picker: Picker::halfblocks(),
+                mpris_tx: watch::channel(MprisSnapshot::default()).0,
+                scrobbler: Some(scrobbler),
+                event_tx: mpsc::unbounded_channel().0,
+                config_path: None,
+            },
         );
         app.status = Some(MpdStatus {
             state: PlaybackState::Playing,
@@ -2816,6 +3058,135 @@ mod tests {
         assert!(text.contains("Sour Times"));
         assert!(text.contains("12 plays"));
         assert!(text.contains("Recent"));
+    }
+
+    #[test]
+    fn browser_sorts_directories_first_and_navigates() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::Browser;
+        app.on_msg(Msg::Browser {
+            uri: None,
+            entries: vec![
+                DirEntry {
+                    kind: EntryKind::File,
+                    uri: Arc::from("song.flac"),
+                    name: Arc::from("song.flac"),
+                    song: None,
+                },
+                DirEntry {
+                    kind: EntryKind::Directory,
+                    uri: Arc::from("Albums"),
+                    name: Arc::from("Albums"),
+                    song: None,
+                },
+            ],
+        });
+        assert_eq!(app.browser.entries[0].kind, EntryKind::Directory);
+        app.on_key(key(KeyCode::Enter));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::Browse(Some(uri))) if uri == "Albums"
+        ));
+    }
+
+    #[test]
+    fn browser_backspace_goes_up_and_enqueue_keys() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::Browser;
+        app.browser.uri = Some("Albums/One".into());
+        app.browser.entries = vec![DirEntry {
+            kind: EntryKind::Directory,
+            uri: Arc::from("Albums/One/Live"),
+            name: Arc::from("Live"),
+            song: None,
+        }];
+        app.on_key(key(KeyCode::Backspace));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::Browse(Some(uri))) if uri == "Albums"
+        ));
+
+        app.browser.uri = Some("Albums/One".into());
+        app.browser.entries = vec![DirEntry {
+            kind: EntryKind::Directory,
+            uri: Arc::from("Albums/One/Live"),
+            name: Arc::from("Live"),
+            song: None,
+        }];
+        app.on_key(key(KeyCode::Char('a')));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::AppendUri(uri)) if uri == "Albums/One/Live"
+        ));
+
+        app.on_key(key(KeyCode::Char('A')));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::ReplaceWithUri(uri)) if uri == "Albums/One/Live"
+        ));
+    }
+
+    #[test]
+    fn header_keeps_the_browser_tab_visible_at_150_columns() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        let backend = TestBackend::new(150, 42);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            text.contains("0 Browser"),
+            "last screen tab must stay visible"
+        );
+
+        let backend = TestBackend::new(200, 42);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Queue (0)"), "wide terminals show counts");
+    }
+
+    #[test]
+    fn reloads_config_theme_and_keymap() {
+        let directory =
+            std::env::temp_dir().join(format!("neo-ncmp-reload-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.toml");
+        std::fs::write(
+            &path,
+            "[ui]\nnotifications = true\n\n[keys.queue]\n\"d\" = \"play_selected\"\n",
+        )
+        .unwrap();
+
+        let mut app = app();
+        app.config_path = Some(path);
+        app.reload_config();
+        assert!(app.config.ui.notifications);
+        assert_eq!(
+            app.keymap
+                .action_for(key(KeyCode::Char('d')), Screen::Queue),
+            Some(Action::PlaySelected)
+        );
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

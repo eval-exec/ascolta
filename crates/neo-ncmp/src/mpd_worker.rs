@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use neo_ncmp_domain::{Library, MpdOutput, MpdStats, MpdStatus, Song};
-use neo_ncmp_mpd::{MpdClient, MpdError, Picture, Playlist, Subsystem};
+use neo_ncmp_mpd::{DirEntry, MpdClient, MpdError, Picture, Playlist, Subsystem};
 
 use crate::lyrics::{self, LyricsDoc};
 use crate::stats::StatsReport;
@@ -112,6 +112,9 @@ pub enum Command {
     },
 
     FetchCover(String),
+    Browse(Option<String>),
+    AppendUri(String),
+    ReplaceWithUri(String),
     SaveTags {
         path: PathBuf,
         uri: String,
@@ -168,6 +171,11 @@ pub enum Msg {
     },
     History(StatsReport),
     HistoryError(String),
+    Browser {
+        uri: Option<String>,
+        entries: Vec<DirEntry>,
+    },
+    ConfigFileChanged,
     Error(String),
 }
 
@@ -592,6 +600,23 @@ async fn execute(
                 .await;
                 send(&tx, Msg::Lyrics { uri, doc });
             });
+        }
+
+        Browse(uri) => {
+            let entries = client.list_entries(uri.as_deref()).await?;
+            send(tx, Msg::Browser { uri, entries });
+        }
+        AppendUri(uri) => {
+            client.add(&uri).await?;
+            refresh_queue(client, tx).await?;
+            refresh_status(client, tx).await?;
+        }
+        ReplaceWithUri(uri) => {
+            client.clear().await?;
+            client.add(&uri).await?;
+            let _ = client.play().await;
+            refresh_queue(client, tx).await?;
+            refresh_status_and_current(client, tx).await?;
         }
 
         FetchCover(uri) => {

@@ -6,7 +6,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use neo_ncmp_domain::{PlaybackState, Song, format_duration};
+use neo_ncmp_domain::{EntryKind, PlaybackState, Song, format_duration};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -36,27 +36,23 @@ struct Theme {
     selected_bg: Color,
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Self {
-            bg: Color::Rgb(26, 27, 38),
-            fg: Color::Rgb(192, 202, 245),
-            dim: Color::Rgb(86, 95, 137),
-            accent: Color::Rgb(122, 162, 247),
-            green: Color::Rgb(158, 206, 106),
-            red: Color::Rgb(247, 118, 142),
-            yellow: Color::Rgb(224, 175, 104),
-            purple: Color::Rgb(187, 154, 247),
-            cyan: Color::Rgb(125, 207, 255),
-            border: Color::Rgb(59, 66, 103),
-            selected_bg: Color::Rgb(40, 52, 87),
-        }
-    }
-}
-
 impl Theme {
+    const DEFAULT: Self = Self {
+        bg: Color::Rgb(26, 27, 38),
+        fg: Color::Rgb(192, 202, 245),
+        dim: Color::Rgb(86, 95, 137),
+        accent: Color::Rgb(122, 162, 247),
+        green: Color::Rgb(158, 206, 106),
+        red: Color::Rgb(247, 118, 142),
+        yellow: Color::Rgb(224, 175, 104),
+        purple: Color::Rgb(187, 154, 247),
+        cyan: Color::Rgb(125, 207, 255),
+        border: Color::Rgb(59, 66, 103),
+        selected_bg: Color::Rgb(40, 52, 87),
+    };
+
     fn from_config(config: &crate::config::ThemeConfig) -> Self {
-        let default = Self::default();
+        let default = Self::DEFAULT;
         Self {
             bg: parse_color(&config.bg, default.bg),
             fg: parse_color(&config.fg, default.fg),
@@ -73,15 +69,25 @@ impl Theme {
     }
 }
 
-static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
-
-fn theme() -> &'static Theme {
-    THEME.get_or_init(Theme::default)
+impl Default for Theme {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
-/// Applies `[theme]` before the first frame. Later calls are ignored.
+static THEME: std::sync::RwLock<Theme> = std::sync::RwLock::new(Theme::DEFAULT);
+
+fn theme() -> Theme {
+    *THEME
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Applies `[theme]`; safe to call again for live reload.
 pub fn apply_theme(config: &crate::config::ThemeConfig) {
-    let _ = THEME.set(Theme::from_config(config));
+    *THEME
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Theme::from_config(config);
 }
 
 fn parse_color(value: &str, fallback: Color) -> Color {
@@ -178,6 +184,8 @@ fn draw_header(app: &App, frame: &mut Frame, area: Rect) {
     let [left, right] =
         Layout::horizontal([Constraint::Min(10), Constraint::Length(right_width)]).areas(area);
 
+    // Counts are useful but push the last tab off narrower terminals.
+    let show_counts = area.width >= 170;
     let mut spans = vec![Span::styled(
         " neo-ncmp ",
         Style::default()
@@ -185,16 +193,20 @@ fn draw_header(app: &App, frame: &mut Frame, area: Rect) {
             .bg(theme().accent)
             .add_modifier(Modifier::BOLD),
     )];
-    for (index, screen) in Screen::ALL.iter().enumerate() {
+    for screen in Screen::ALL.iter() {
+        let number = screen.key_number();
         let label = match screen {
-            Screen::Queue => format!(" {} Queue ({}) ", index + 1, app.queue.len()),
-            Screen::Library => format!(
-                " {} Library ({}) ",
-                index + 1,
+            Screen::Queue if show_counts => {
+                format!(" {number} Queue ({}) ", app.queue.len())
+            }
+            Screen::Library if show_counts => format!(
+                " {number} Library ({}) ",
                 app.library.as_ref().map_or(0, |library| library.len())
             ),
-            Screen::Playlists => format!(" {} Playlists ({}) ", index + 1, app.playlists.len()),
-            _ => format!(" {} {} ", index + 1, screen.title()),
+            Screen::Playlists if show_counts => {
+                format!(" {number} Playlists ({}) ", app.playlists.len())
+            }
+            _ => format!(" {number} {} ", screen.title()),
         };
         let style = if *screen == app.screen {
             Style::default()
@@ -241,6 +253,7 @@ fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
         Screen::Visualizer => draw_visualizer(app, frame, area),
         Screen::TagEditor => draw_tags(app, frame, area),
         Screen::History => draw_history(app, frame, area),
+        Screen::Browser => draw_browser(app, frame, area),
     }
 }
 
@@ -691,12 +704,15 @@ fn draw_visualizer(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     }
     if let Some(error) = &app.visualizer_error {
+        let hint = if settings.source.starts_with("pipewire") || settings.source == "pw" {
+            "PipeWire capture needs pw-record and a usable default sink; set [visualizer] target to override it"
+        } else {
+            "Add an MPD fifo audio output pointed at this path"
+        };
         frame.render_widget(
-            Paragraph::new(format!(
-                "{error}\n\nAdd an MPD fifo audio output pointed at this path"
-            ))
-            .style(dim_style())
-            .alignment(Alignment::Center),
+            Paragraph::new(format!("{error}\n\n{hint}"))
+                .style(dim_style())
+                .alignment(Alignment::Center),
             inner,
         );
         return;
@@ -853,6 +869,98 @@ fn draw_tags(app: &mut App, frame: &mut Frame, area: Rect) {
         Paragraph::new(fit(message, message_area.width as usize)).style(style),
         message_area,
     );
+}
+
+fn draw_browser(app: &mut App, frame: &mut Frame, area: Rect) {
+    let location = app
+        .browser
+        .uri
+        .as_deref()
+        .map(|uri| format!("/{uri}"))
+        .unwrap_or_else(|| "/".into());
+    let block = pane_block(&format!("Browser — {location}"), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    if app.browser.loading {
+        frame.render_widget(
+            Paragraph::new("Loading directory…")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+    if app.browser.entries.is_empty() {
+        frame.render_widget(
+            Paragraph::new("Empty directory — Backspace to go up")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+
+    let height = inner.height as usize;
+    app.browser
+        .view
+        .ensure_visible(app.browser.entries.len(), height);
+    let cursor = app.browser.view.cursor;
+    let start = app.browser.view.offset;
+    let end = (start + height).min(app.browser.entries.len());
+    let width = inner.width as usize;
+    let name_width = (width * 2 / 5).max(10);
+
+    for (row, index) in (start..end).enumerate() {
+        let entry = &app.browser.entries[index];
+        let (marker, color) = match entry.kind {
+            EntryKind::Directory => ("[D]", theme().accent),
+            EntryKind::Playlist => ("[P]", theme().purple),
+            EntryKind::File => ("[F]", theme().green),
+        };
+        let detail = match entry.kind {
+            EntryKind::Directory => "directory".to_string(),
+            EntryKind::Playlist => "playlist".to_string(),
+            EntryKind::File => entry
+                .song
+                .as_ref()
+                .map(|song| format!("{} — {}", song.display_artist(), song.display_album()))
+                .unwrap_or_default(),
+        };
+        let line = Line::from(vec![
+            Span::styled(
+                marker,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::raw(fit(&entry.name, name_width)),
+            Span::raw(" "),
+            Span::styled(
+                fit(&detail, width.saturating_sub(3 + 1 + name_width + 1)),
+                dim_style(),
+            ),
+        ]);
+        let selected = index == cursor;
+        let style = if selected {
+            Style::default()
+                .bg(theme().selected_bg)
+                .fg(theme().fg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme().fg)
+        };
+        frame.render_widget(
+            Paragraph::new(line).style(style),
+            Rect {
+                x: inner.x,
+                y: inner.y + row as u16,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
 }
 
 fn draw_history(app: &App, frame: &mut Frame, area: Rect) {
@@ -1853,7 +1961,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 
     let key = |keys: &'static str, description: &'static str| {
         Line::from(vec![
-            Span::styled(format!("  {keys:<9}"), Style::default().fg(theme().accent)),
+            Span::styled(format!("  {keys:<10}"), Style::default().fg(theme().accent)),
             Span::raw(description),
         ])
     };
@@ -1870,11 +1978,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         heading("Global"),
         key("? :", "help / command palette"),
         key("q", "quit"),
-        key("Tab 1-9", "next screen / jump to screen"),
+        key("Tab 0-9", "next screen / jump to screen"),
         key("R", "reload MPD state and library"),
         heading("Playback"),
-        key("space p", "play or pause"),
-        key("s", "stop"),
+        key("space p s", "play or pause / stop"),
         key("> . n", "next track"),
         key("< , N", "previous track"),
         key("f b", "seek +5s / -5s"),
@@ -1883,30 +1990,28 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         heading("Queue"),
         key("j k g G", "move cursor"),
         key("Enter", "play selected queue item"),
-        key("d", "remove selected"),
-        key("J K", "move selected down / up"),
+        key("d J K", "remove / move selected"),
         key("C S", "clear (confirms) / shuffle"),
         heading("Library"),
         key("h l", "previous / next pane"),
-        key("Enter", "append selection and play"),
-        key("a A", "append / replace queue and play"),
+        key("Enter a A", "play / enqueue / replace and play"),
         heading("Playlists"),
         key("h l", "playlists / songs pane"),
-        key("Enter", "replace queue and play"),
-        key("a", "append to queue"),
+        key("Enter a", "play / enqueue"),
         key("S e x", "save queue / rename / delete"),
         key("d J K", "remove / move song"),
-        heading("Outputs"),
-        key("Enter", "enable or disable output"),
-        heading("Lyrics"),
-        key("o", "fetch lyrics again"),
-        key("[ ]", "offset -0.5s / +0.5s"),
-        heading("Visualizer"),
-        key("7", "spectrum screen"),
-        heading("Tags"),
-        key("8", "tag editor"),
-        key("Enter", "edit selected field"),
-        key("w", "write tags (creates a backup)"),
+        heading("Browser"),
+        key("0", "file browser"),
+        key("h bksp", "parent directory"),
+        key("Enter", "open directory / play song"),
+        key("a A", "enqueue / replace queue and play"),
+        heading("Screens and extras"),
+        key("4", "outputs — Enter toggles"),
+        key("5", "statistics"),
+        key("6", "lyrics — o refetch, [ ] offset"),
+        key("7", "visualizer"),
+        key("8", "tag editor — Enter edits, w writes"),
+        key("9", "history — Enter plays top song"),
     ];
 
     frame.render_widget(

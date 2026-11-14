@@ -18,6 +18,7 @@
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,22 +36,38 @@ pub struct AudioSpec {
     pub bits: u8,
 }
 
-pub fn spawn(fifo: PathBuf, spec: AudioSpec, bars: usize, tx: UnboundedSender<Msg>) {
+pub fn spawn(
+    fifo: PathBuf,
+    source: &str,
+    target: Option<String>,
+    spec: AudioSpec,
+    bars: usize,
+    tx: UnboundedSender<Msg>,
+) {
     if spec.bits != 16 || spec.channels == 0 || spec.sample_rate == 0 {
         let _ = tx.send(Msg::VisualizerError(Some(
             "the visualizer currently supports 16-bit PCM with at least one channel".into(),
         )));
         return;
     }
-    tokio::task::spawn_blocking(move || reader_loop(fifo, spec, bars.max(1), tx));
+    let bars = bars.max(1);
+    match source {
+        "fifo" => {
+            tokio::task::spawn_blocking(move || reader_loop(fifo, spec, bars, tx));
+        }
+        "pipewire" | "pw" => {
+            tokio::task::spawn_blocking(move || pipewire_loop(spec, bars, target, tx));
+        }
+        other => {
+            let _ = tx.send(Msg::VisualizerError(Some(format!(
+                "unknown visualizer source {other:?}; use \"fifo\" or \"pipewire\""
+            ))));
+        }
+    }
 }
 
 fn reader_loop(fifo: PathBuf, spec: AudioSpec, bars: usize, tx: UnboundedSender<Msg>) {
-    let frame_bytes = 2 * spec.channels as usize;
-    let window_bytes = FFT_SIZE * frame_bytes;
     let mut analyzer = SpectrumAnalyzer::new(spec.sample_rate, FFT_SIZE, bars);
-    let mut buffer = vec![0u8; 16 * 1024];
-    let mut pending: Vec<u8> = Vec::with_capacity(window_bytes * 2);
     let mut first_frame = true;
 
     loop {
@@ -58,7 +75,7 @@ fn reader_loop(fifo: PathBuf, spec: AudioSpec, bars: usize, tx: UnboundedSender<
             "waiting for audio at {}",
             fifo.display()
         ))));
-        let mut file = match OpenOptions::new().read(true).open(&fifo) {
+        let file = match OpenOptions::new().read(true).open(&fifo) {
             Ok(file) => file,
             Err(error) => {
                 let _ = tx.send(Msg::VisualizerError(Some(format!(
@@ -73,43 +90,146 @@ fn reader_loop(fifo: PathBuf, spec: AudioSpec, bars: usize, tx: UnboundedSender<
             }
         };
         let _ = tx.send(Msg::VisualizerError(None));
-        pending.clear();
-
-        loop {
-            match file.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    pending.extend_from_slice(&buffer[..read]);
-                    while pending.len() >= window_bytes {
-                        let chunk: Vec<u8> = pending.drain(..window_bytes).collect();
-                        let samples = decode_mono(&chunk, FFT_SIZE, spec.channels);
-                        let values = analyzer.analyze(&samples);
-                        if first_frame {
-                            first_frame = false;
-                            tracing::info!(
-                                max = values.iter().copied().fold(0.0f32, f32::max),
-                                "visualizer received its first audio frame"
-                            );
-                        }
-                        if tx.send(Msg::Visualizer(values)).is_err() {
-                            return;
-                        }
-                    }
-                }
-                Err(error) => {
-                    let _ = tx.send(Msg::VisualizerError(Some(format!(
-                        "audio read error: {error}"
-                    ))));
-                    break;
-                }
-            }
-        }
-
-        if tx.is_closed() {
+        if !consume(file, spec, &mut analyzer, &tx, &mut first_frame) {
             return;
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+fn pipewire_loop(spec: AudioSpec, bars: usize, target: Option<String>, tx: UnboundedSender<Msg>) {
+    let mut analyzer = SpectrumAnalyzer::new(spec.sample_rate, FFT_SIZE, bars);
+    let mut first_frame = true;
+
+    loop {
+        let sink = match target.clone().or_else(default_sink) {
+            Some(sink) => sink,
+            None => {
+                let _ = tx.send(Msg::VisualizerError(Some(
+                    "could not find the default PipeWire sink; set [visualizer] target".into(),
+                )));
+                if tx.is_closed() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+        };
+        let _ = tx.send(Msg::VisualizerError(Some(format!(
+            "capturing PipeWire sink {sink}"
+        ))));
+
+        let rate = format!("--rate={}", spec.sample_rate);
+        let channels = format!("--channels={}", spec.channels);
+        let mut child = match Command::new("pw-record")
+            .args([
+                "--raw",
+                "--format=s16",
+                rate.as_str(),
+                channels.as_str(),
+                "--target",
+                sink.as_str(),
+                "--properties",
+                "stream.capture.sink=true",
+                "-",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = tx.send(Msg::VisualizerError(Some(format!(
+                    "could not start pw-record: {error}"
+                ))));
+                if error.kind() == std::io::ErrorKind::NotFound || tx.is_closed() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+        };
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            return;
+        };
+        let _ = tx.send(Msg::VisualizerError(None));
+        let alive = consume(stdout, spec, &mut analyzer, &tx, &mut first_frame);
+        let _ = child.kill();
+        let _ = child.wait();
+        if !alive {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn consume<R: Read>(
+    mut reader: R,
+    spec: AudioSpec,
+    analyzer: &mut SpectrumAnalyzer,
+    tx: &UnboundedSender<Msg>,
+    first_frame: &mut bool,
+) -> bool {
+    let frame_bytes = 2 * spec.channels as usize;
+    let window_bytes = FFT_SIZE * frame_bytes;
+    let mut buffer = vec![0u8; 16 * 1024];
+    let mut pending: Vec<u8> = Vec::with_capacity(window_bytes * 2);
+
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => return true,
+            Ok(read) => {
+                pending.extend_from_slice(&buffer[..read]);
+                while pending.len() >= window_bytes {
+                    let chunk: Vec<u8> = pending.drain(..window_bytes).collect();
+                    let samples = decode_mono(&chunk, FFT_SIZE, spec.channels);
+                    let values = analyzer.analyze(&samples);
+                    if *first_frame {
+                        *first_frame = false;
+                        tracing::info!(
+                            max = values.iter().copied().fold(0.0f32, f32::max),
+                            "visualizer received its first audio frame"
+                        );
+                    }
+                    if tx.send(Msg::Visualizer(values)).is_err() {
+                        return false;
+                    }
+                }
+            }
+            Err(error) => {
+                let _ = tx.send(Msg::VisualizerError(Some(format!(
+                    "audio read error: {error}"
+                ))));
+                return true;
+            }
+        }
+    }
+}
+
+/// Parses `pw-metadata -n default` output for the active default sink name.
+pub fn parse_default_sink(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let Some(index) = line.find("default.audio.sink") else {
+            continue;
+        };
+        let rest = &line[index..];
+        if let Some(start) = rest.find("\"name\":\"") {
+            let rest = &rest[start + 8..];
+            if let Some(end) = rest.find('"') {
+                return Some(rest[..end].to_string());
+            }
+        }
+    }
+    None
+}
+
+fn default_sink() -> Option<String> {
+    let output = Command::new("pw-metadata")
+        .args(["-n", "default"])
+        .output()
+        .ok()?;
+    parse_default_sink(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Decodes interleaved little-endian 16-bit PCM to mono `f32` samples.
@@ -297,6 +417,16 @@ mod tests {
             values.iter().copied().fold(0.0f32, f32::max) > 0.4,
             "decoded PCM should produce visible bars: {values:?}"
         );
+    }
+
+    #[test]
+    fn parses_pipewire_default_sink() {
+        let text = r#"update: id:0 key:'default.audio.sink' value:'{"name":"alsa_output.pci.HiFi__Speaker__sink"}' type:'Spa:String:JSON'"#;
+        assert_eq!(
+            parse_default_sink(text).as_deref(),
+            Some("alsa_output.pci.HiFi__Speaker__sink")
+        );
+        assert_eq!(parse_default_sink("nothing here"), None);
     }
 
     #[test]

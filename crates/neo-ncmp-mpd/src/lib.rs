@@ -19,7 +19,8 @@ pub use protocol::Response;
 pub use neo_ncmp_domain as domain;
 
 pub use domain::{
-    AudioFormat, Library, MpdOutput, MpdStats, MpdStatus, PlaybackState, QueuePos, Song, SongId,
+    AudioFormat, DirEntry, EntryKind, Library, MpdOutput, MpdStats, MpdStatus, PlaybackState,
+    QueuePos, Song, SongId,
 };
 
 /// A subsystem reported by MPD's `idle` command.

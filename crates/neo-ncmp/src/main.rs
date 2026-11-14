@@ -130,6 +130,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let _log_guard = logging::init()?;
 
+    let config_path = cli.config.clone().or_else(config::default_config_path);
     let mut config = config::Config::load(cli.config.as_deref())?;
     if let Some(host) = cli.host {
         config.mpd.host = host;
@@ -145,7 +146,7 @@ async fn main() -> Result<()> {
         None if cli.check => check(&config).await,
         None => {
             let mut terminal = ratatui::init();
-            let result = app::App::run(config, &mut terminal).await;
+            let result = app::App::run(config, config_path, &mut terminal).await;
             ratatui::restore();
             result
         }

@@ -4,7 +4,7 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-use neo_ncmp_domain::{MpdOutput, MpdStats, MpdStatus, Song};
+use neo_ncmp_domain::{DirEntry, MpdOutput, MpdStats, MpdStatus, Song};
 
 use crate::Subsystem;
 use crate::error::{MpdError, Result};
@@ -117,6 +117,16 @@ impl MpdClient {
     pub async fn list_info(&mut self, uri: &str) -> Result<Vec<Song>> {
         let response = self.command("lsinfo", &[uri]).await?;
         Ok(parse::songs(&response))
+    }
+
+    /// Lists a directory (or the database root) including subdirectories,
+    /// stored playlists, and tagged files.
+    pub async fn list_entries(&mut self, uri: Option<&str>) -> Result<Vec<DirEntry>> {
+        let response = match uri {
+            Some(uri) => self.command("lsinfo", &[uri]).await?,
+            None => self.command("lsinfo", &[]).await?,
+        };
+        Ok(parse::entries(&response))
     }
 
     pub async fn outputs(&mut self) -> Result<Vec<MpdOutput>> {

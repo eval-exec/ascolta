@@ -9,7 +9,8 @@ neo-ncmp \- modern, feature-rich terminal client for MPD
 is a terminal music client for the Music Player Daemon (MPD). It keeps the
 keyboard conventions of ncmpcpp while providing asynchronous library indexing,
 live idle updates, fuzzy search, terminal album art, synced lyrics, MPRIS,
-scrobbling, a play history, a tag editor, and a real-time visualizer.
+scrobbling, a play history, a tag editor, a file browser, and a real-time
+visualizer fed by an MPD FIFO or a PipeWire sink monitor.
 .PP
 With no command it starts the TUI. MPD remains responsible for playback.
 .SH OPTIONS
@@ -72,9 +73,9 @@ See \fIconfig.example.toml\fR in the distribution for all sections
 .B ?, :, /
 Help, command palette, and fuzzy library search.
 .TP
-.B 1\-9, Tab, Shift-Tab
-Queue, Library, Playlists, Outputs, Stats, Lyrics, Visualizer, Tags, History;
-next/previous screen.
+.B 1\-9, 0, Tab, Shift-Tab
+Queue, Library, Playlists, Outputs, Stats, Lyrics, Visualizer, Tags, History,
+Browser; next/previous screen.
 .TP
 .B j k, arrows, g G, Ctrl-D Ctrl-U
 Navigation, first/last, page movement.
@@ -86,7 +87,13 @@ Play/pause, stop, next/previous, seek, volume.
 Repeat, random, single, consume.
 .TP
 .B Enter
-Play selection; on Tags, edit the selected field.
+Play selection or open a Browser directory; on Tags, edit the selected field.
+.TP
+.B a, A
+Enqueue, or replace the queue and play (Library, Playlists, and Browser).
+.TP
+.B h, l, Backspace
+Move between panes; in Browser, go to the parent directory.
 .PP
 All bindings are configurable in the \fB[keys.<context>]\fR tables; use
 \fB"none"\fR to unbind.
