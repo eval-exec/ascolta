@@ -75,6 +75,12 @@ impl Service {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueuedScrobble {
+    pub service: String,
+    pub event: ScrobbleEvent,
+}
+
 #[derive(Clone)]
 pub struct ScrobbleHandle {
     tx: mpsc::UnboundedSender<ScrobbleEvent>,
@@ -111,7 +117,10 @@ async fn run(config: ScrobblingConfig, mut rx: mpsc::UnboundedReceiver<ScrobbleE
         }
     };
 
-    flush_queue(&client, &config).await;
+    let remaining = flush_queue(&client, &config).await;
+    if remaining > 0 {
+        tracing::info!(remaining, "offline scrobbles are still pending");
+    }
 
     while let Some(event) = rx.recv().await {
         for service in enabled_services(&config) {
@@ -266,21 +275,73 @@ fn hex_digest(bytes: &[u8]) -> String {
     output
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct QueuedFailure {
-    service: String,
-    event: ScrobbleEvent,
-}
-
 fn queue_path() -> Option<PathBuf> {
     Some(crate::config::state_dir()?.join("scrobble-queue.jsonl"))
+}
+
+/// Reads the offline queue. Unparseable lines are skipped.
+pub fn load_queue() -> Vec<QueuedScrobble> {
+    queue_path()
+        .map(|path| load_queue_at(&path))
+        .unwrap_or_default()
+}
+
+pub fn load_queue_at(path: &std::path::Path) -> Vec<QueuedScrobble> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter_map(|line| serde_json::from_str::<QueuedScrobble>(line).ok())
+        .collect()
+}
+
+/// Removes one queued entry and returns how many remain.
+pub fn forget_queued(index: usize) -> Result<usize> {
+    let path = queue_path().context("could not determine the state directory")?;
+    forget_queued_at(&path, index)
+}
+
+pub fn forget_queued_at(path: &std::path::Path, index: usize) -> Result<usize> {
+    let mut queue = load_queue_at(path);
+    if index >= queue.len() {
+        bail!(
+            "scrobble index {index} is out of range ({} entries)",
+            queue.len()
+        );
+    }
+    queue.remove(index);
+    if queue.is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else {
+        let text = queue
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n");
+        std::fs::write(path, text + "\n")?;
+    }
+    Ok(queue.len())
+}
+
+/// Retries queued scrobbles once and returns `(sent, remaining)`.
+pub async fn retry_pending(config: &ScrobblingConfig) -> Result<(usize, usize)> {
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(10))
+        .build()
+        .context("could not create scrobbling client")?;
+    let queued = load_queue();
+    let total = queued.len();
+    let remaining = flush_queue(&client, config).await;
+    Ok((total.saturating_sub(remaining), remaining))
 }
 
 fn persist_failure(service: Service, event: &ScrobbleEvent) {
     let Some(path) = queue_path() else {
         return;
     };
-    let queued = QueuedFailure {
+    let queued = QueuedScrobble {
         service: service.name().to_owned(),
         event: event.clone(),
     };
@@ -300,21 +361,22 @@ fn persist_failure(service: Service, event: &ScrobbleEvent) {
     }
 }
 
-async fn flush_queue(client: &reqwest::Client, config: &ScrobblingConfig) {
+/// Sends every queued scrobble, returning how many still remain.
+async fn flush_queue(client: &reqwest::Client, config: &ScrobblingConfig) -> usize {
     let Some(path) = queue_path() else {
-        return;
+        return 0;
     };
     let Ok(contents) = std::fs::read_to_string(&path) else {
-        return;
+        return 0;
     };
     if contents.trim().is_empty() {
         let _ = std::fs::remove_file(&path);
-        return;
+        return 0;
     }
 
     let mut remaining = Vec::new();
     for line in contents.lines() {
-        let Ok(queued) = serde_json::from_str::<QueuedFailure>(line) else {
+        let Ok(queued) = serde_json::from_str::<QueuedScrobble>(line) else {
             continue;
         };
         let Some(service) = Service::parse(&queued.service) else {
@@ -331,6 +393,7 @@ async fn flush_queue(client: &reqwest::Client, config: &ScrobblingConfig) {
     } else {
         let _ = std::fs::write(&path, remaining.join("\n") + "\n");
     }
+    remaining.len()
 }
 
 /// The standard scrobble threshold: half the track, capped at four minutes.
@@ -390,6 +453,45 @@ mod tests {
         let expected = hex_digest(&Md5::digest(b"a1b2secret"));
         assert_eq!(lastfm_signature(&params, "secret"), expected);
         assert_eq!(lastfm_signature(&params, "secret").len(), 32);
+    }
+
+    #[test]
+    fn loads_queued_scrobbles_and_skips_bad_lines() {
+        let directory =
+            std::env::temp_dir().join(format!("neo-ncmp-scrobble-queue-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("queue.jsonl");
+        let first = QueuedScrobble {
+            service: "listenbrainz".into(),
+            event: event(ScrobbleKind::Single),
+        };
+        let second = QueuedScrobble {
+            service: "lastfm".into(),
+            event: event(ScrobbleKind::Single),
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "{}\nnot json\n{}\n",
+                serde_json::to_string(&first).unwrap(),
+                serde_json::to_string(&second).unwrap()
+            ),
+        )
+        .unwrap();
+        let loaded = load_queue_at(&path);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].service, "listenbrainz");
+        assert_eq!(loaded[1].event.track.title, "Title");
+        assert!(load_queue_at(&directory.join("missing.jsonl")).is_empty());
+
+        assert_eq!(forget_queued_at(&path, 0).unwrap(), 1);
+        let remaining = load_queue_at(&path);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].service, "lastfm");
+        assert!(forget_queued_at(&path, 5).is_err());
+        assert_eq!(forget_queued_at(&path, 0).unwrap(), 0);
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

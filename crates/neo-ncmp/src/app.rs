@@ -27,7 +27,8 @@ use crate::mpd_worker::{self, Command, MpdHandle, Msg, PlayerOption};
 use crate::mpris::{self, MprisSnapshot};
 use crate::palette::{PaletteAction, PaletteState};
 use crate::scrobbler::{
-    self, ScrobbleEvent, ScrobbleHandle, ScrobbleKind, ScrobbleTrack, now_unix, scrobble_threshold,
+    self, QueuedScrobble, ScrobbleEvent, ScrobbleHandle, ScrobbleKind, ScrobbleTrack, now_unix,
+    scrobble_threshold,
 };
 use crate::search::{SearchHandle, SearchIndex, SearchState};
 use crate::session::SessionState;
@@ -471,6 +472,7 @@ pub struct App {
     search_history: Vec<String>,
     search_history_cursor: Option<usize>,
     search_history_draft: String,
+    pub scrobble_pending: Vec<QueuedScrobble>,
     pub search_index: Option<Arc<SearchIndex>>,
     search_handle: SearchHandle,
     search_generation: u64,
@@ -557,6 +559,7 @@ impl App {
             search_history: Vec::new(),
             search_history_cursor: None,
             search_history_draft: String::new(),
+            scrobble_pending: Vec::new(),
             search_index: None,
             search_handle,
             search_generation: 0,
@@ -993,6 +996,16 @@ impl App {
                 self.toast_info(format!("Switched to partition \"{name}\""));
                 self.mpd.send(Command::RefreshPlaylists);
             }
+            Msg::ScrobbleRetry { sent, remaining } => {
+                self.scrobble_pending = scrobbler::load_queue();
+                if remaining == 0 {
+                    self.toast_success(format!("Sent {sent} pending scrobble(s)"));
+                } else {
+                    self.toast_info(format!(
+                        "Sent {sent} scrobble(s); {remaining} still pending"
+                    ));
+                }
+            }
             Msg::Browser { uri, entries } => {
                 if self.browser.uri == uri {
                     let mut entries = entries;
@@ -1409,10 +1422,31 @@ impl App {
             Action::LyricsLater => self.adjust_lyrics_offset(500),
             Action::EditTag => self.open_tag_input(),
             Action::SaveTags => self.request_save_tags(),
+            Action::RetryScrobbles => self.retry_scrobbles(),
             Action::SavePlaylist => self.open_save_playlist(),
             Action::RenamePlaylist => self.open_rename_playlist(),
             Action::DeletePlaylist => self.request_delete_playlist(),
         }
+    }
+
+    fn retry_scrobbles(&mut self) {
+        if !self.config.scrobbling.enabled {
+            self.toast_error("Scrobbling is disabled");
+            return;
+        }
+        let config = self.config.scrobbling.clone();
+        let tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            match scrobbler::retry_pending(&config).await {
+                Ok((sent, remaining)) => {
+                    let _ = tx.send(Msg::ScrobbleRetry { sent, remaining });
+                }
+                Err(error) => {
+                    let _ = tx.send(Msg::Error(format!("scrobble retry failed: {error}")));
+                }
+            }
+        });
+        self.toast_info("Retrying pending scrobbles…");
     }
 
     fn publish_mpris(&self) {
@@ -2119,7 +2153,10 @@ impl App {
             }
             Screen::Browser => {}
             Screen::Outputs => self.mpd.send(Command::RefreshOutputs),
-            Screen::Stats => self.mpd.send(Command::RefreshStats),
+            Screen::Stats => {
+                self.scrobble_pending = scrobbler::load_queue();
+                self.mpd.send(Command::RefreshStats);
+            }
             _ => {}
         }
     }

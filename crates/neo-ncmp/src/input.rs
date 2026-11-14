@@ -55,6 +55,7 @@ pub enum Action {
     LyricsLater,
     EditTag,
     SaveTags,
+    RetryScrobbles,
     BrowserUp,
 }
 
@@ -401,6 +402,7 @@ pub(crate) fn parse_action(spec: &str) -> Result<Action, String> {
         "lyrics_later" => Action::LyricsLater,
         "edit_tag" => Action::EditTag,
         "save_tags" => Action::SaveTags,
+        "retry_scrobbles" => Action::RetryScrobbles,
         "browser_up" => Action::BrowserUp,
         other => return Err(format!("unknown action {other:?}")),
     })
@@ -580,6 +582,10 @@ mod tests {
             Action::GotoScreen(8)
         );
         assert_eq!(parse_action("toggle_play").unwrap(), Action::TogglePlay);
+        assert_eq!(
+            parse_action("retry_scrobbles").unwrap(),
+            Action::RetryScrobbles
+        );
         assert!(parse_action("dance").is_err());
     }
 }

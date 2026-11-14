@@ -67,6 +67,16 @@ List MPD partitions; the active one is marked with an asterisk.
 .TP
 .B partition \fINAME\fR
 Switch partition, changing the queue and playback state.
+.SH SCROBBLE QUEUE
+.TP
+.B scrobble queue [\-\-json]
+List pending offline scrobbles. The Stats screen shows the same queue.
+.TP
+.B scrobble retry
+Retry every queued scrobble once; failures stay queued.
+.TP
+.B scrobble forget \fIINDEX\fR
+Remove one entry by its index from \fBscrobble queue\fR.
 .TP
 .B playlist \fINAME\fR
 Replace the queue with a stored playlist and play it.

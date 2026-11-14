@@ -1344,6 +1344,32 @@ fn draw_stats(app: &App, frame: &mut Frame, area: Rect) {
         )));
     }
 
+    if app.config.scrobbling.enabled {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Scrobbling",
+            Style::default()
+                .fg(theme().accent)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(kv("Pending", app.scrobble_pending.len().to_string()));
+        for queued in app.scrobble_pending.iter().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}  ", queued.service), dim_style()),
+                Span::raw(format!(
+                    "{} — {}",
+                    queued.event.track.artist, queued.event.track.title
+                )),
+            ]));
+        }
+        if !app.scrobble_pending.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  Retry from the command palette (:)",
+                dim_style(),
+            )));
+        }
+    }
+
     frame.render_widget(
         Paragraph::new(Text::from(lines))
             .style(base_style())

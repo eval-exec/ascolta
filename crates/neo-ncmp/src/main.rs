@@ -77,11 +77,30 @@ enum Command {
     /// `neo-ncmp ipc search "artist:portishead"`.
     Ipc {
         /// Command: ping, status, screen, search, action, volume, seek,
-        /// playlist, notify.
+        /// playlist, partition, notify.
         command: String,
         /// String or number argument for the command.
         value: Option<String>,
     },
+
+    /// Inspect or retry the offline scrobble queue.
+    Scrobble {
+        #[command(subcommand)]
+        action: ScrobbleAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ScrobbleAction {
+    /// List pending scrobbles, oldest first.
+    Queue {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retry every queued scrobble once.
+    Retry,
+    /// Remove one queued entry by its index from `scrobble queue`.
+    Forget { index: usize },
 }
 
 #[derive(Debug, Subcommand)]
@@ -166,6 +185,7 @@ async fn main() -> Result<()> {
         Some(Command::Status { json }) => print_status(&config, json).await,
         Some(Command::Remote { action }) => remote(&config, action).await,
         Some(Command::Ipc { command, value }) => ipc_request(&config, &command, value).await,
+        Some(Command::Scrobble { action }) => scrobble_command(&config, action).await,
         None if cli.check => check(&config).await,
         None => {
             let mouse = config.ui.mouse;
@@ -185,6 +205,40 @@ async fn main() -> Result<()> {
             result
         }
     }
+}
+
+async fn scrobble_command(config: &config::Config, action: ScrobbleAction) -> Result<()> {
+    match action {
+        ScrobbleAction::Queue { json } => {
+            let queue = scrobbler::load_queue();
+            if json {
+                println!("{}", serde_json::to_string(&queue)?);
+                return Ok(());
+            }
+            if queue.is_empty() {
+                println!("No pending scrobbles");
+                return Ok(());
+            }
+            for (index, queued) in queue.iter().enumerate() {
+                println!(
+                    "{index:>3}  {:<12}  {} — {}",
+                    queued.service, queued.event.track.artist, queued.event.track.title
+                );
+            }
+        }
+        ScrobbleAction::Forget { index } => {
+            let remaining = scrobbler::forget_queued(index)?;
+            println!("removed; {remaining} pending");
+        }
+        ScrobbleAction::Retry => {
+            if !config.scrobbling.enabled {
+                bail!("scrobbling is disabled in the configuration");
+            }
+            let (sent, remaining) = scrobbler::retry_pending(&config.scrobbling).await?;
+            println!("sent {sent}, {remaining} still pending");
+        }
+    }
+    Ok(())
 }
 
 async fn ipc_request(config: &config::Config, command: &str, value: Option<String>) -> Result<()> {

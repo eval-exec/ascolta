@@ -50,7 +50,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Synced lyrics from local `.lrc` or LRCLIB, active-line highlight, `[`/`]` offset
 - MPRIS server: media keys, `playerctl`, desktop widgets; released cleanly on exit
 - Desktop notifications on track change
-- ListenBrainz and Last.fm scrobbling with offline retry queue
+- ListenBrainz and Last.fm scrobbling with an inspectable offline queue, manual retry, and entry removal
 - Real-time spectrum visualizer from an MPD FIFO output or PipeWire monitor capture
 - Tag editor with full-file backups and confirmation before writing
 - Remote CLI and machine-readable `status --json` for status bars
@@ -104,7 +104,14 @@ neo-ncmp remote output 0 on
 neo-ncmp remote partitions         # active partition marked with *
 neo-ncmp remote partition "headphones"
 neo-ncmp remote status --json
+neo-ncmp scrobble queue          # list pending offline scrobbles
+neo-ncmp scrobble queue --json
+neo-ncmp scrobble retry          # retry all now
+neo-ncmp scrobble forget 0       # drop one entry
 ```
+
+The Stats screen also shows pending scrobbles and the command palette offers
+"Retry pending scrobbles".
 
 While the TUI is running, app-specific commands go through its private Unix
 socket (`$XDG_RUNTIME_DIR/neo-ncmp/socket`, mode 0600):

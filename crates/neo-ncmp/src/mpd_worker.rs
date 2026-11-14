@@ -164,6 +164,10 @@ pub enum Msg {
         picture: Option<Picture>,
     },
     PartitionChanged(String),
+    ScrobbleRetry {
+        sent: usize,
+        remaining: usize,
+    },
     Ipc {
         line: String,
         reply: tokio::sync::oneshot::Sender<String>,

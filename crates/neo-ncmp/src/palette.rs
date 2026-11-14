@@ -39,6 +39,7 @@ const COMMANDS: &[(&str, Action)] = &[
     ("Go to history", Action::GotoScreen(8)),
     ("Go to file browser", Action::GotoScreen(9)),
     ("Search library", Action::OpenSearch),
+    ("Retry pending scrobbles", Action::RetryScrobbles),
     ("Reload everything", Action::Refresh),
     ("Help", Action::ToggleHelp),
     ("Quit", Action::Quit),
@@ -137,6 +138,10 @@ mod tests {
         palette.refresh();
         assert_eq!(palette.results.len(), 1);
         assert_eq!(palette.selected().unwrap().label, "Go to library");
+
+        palette.query = "retry".into();
+        palette.refresh();
+        assert_eq!(palette.selected().unwrap().label, "Retry pending scrobbles");
     }
 
     #[test]
