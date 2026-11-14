@@ -12,9 +12,12 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Gauge, Paragraph, Wrap};
+use ratatui_image::{Resize, StatefulImage};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Confirm, ConnectionState, LibraryPane, Screen, Toast, ToastLevel};
+use crate::app::{
+    App, Confirm, ConnectionState, InputModal, LibraryPane, PlaylistPane, Screen, Toast, ToastLevel,
+};
 use crate::search::SearchKind;
 use crate::widgets::{ListView, fit, fit_right};
 
@@ -33,26 +36,88 @@ struct Theme {
     selected_bg: Color,
 }
 
-const THEME: Theme = Theme {
-    bg: Color::Rgb(26, 27, 38),
-    fg: Color::Rgb(192, 202, 245),
-    dim: Color::Rgb(86, 95, 137),
-    accent: Color::Rgb(122, 162, 247),
-    green: Color::Rgb(158, 206, 106),
-    red: Color::Rgb(247, 118, 142),
-    yellow: Color::Rgb(224, 175, 104),
-    purple: Color::Rgb(187, 154, 247),
-    cyan: Color::Rgb(125, 207, 255),
-    border: Color::Rgb(59, 66, 103),
-    selected_bg: Color::Rgb(40, 52, 87),
-};
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            bg: Color::Rgb(26, 27, 38),
+            fg: Color::Rgb(192, 202, 245),
+            dim: Color::Rgb(86, 95, 137),
+            accent: Color::Rgb(122, 162, 247),
+            green: Color::Rgb(158, 206, 106),
+            red: Color::Rgb(247, 118, 142),
+            yellow: Color::Rgb(224, 175, 104),
+            purple: Color::Rgb(187, 154, 247),
+            cyan: Color::Rgb(125, 207, 255),
+            border: Color::Rgb(59, 66, 103),
+            selected_bg: Color::Rgb(40, 52, 87),
+        }
+    }
+}
+
+impl Theme {
+    fn from_config(config: &crate::config::ThemeConfig) -> Self {
+        let default = Self::default();
+        Self {
+            bg: parse_color(&config.bg, default.bg),
+            fg: parse_color(&config.fg, default.fg),
+            dim: parse_color(&config.dim, default.dim),
+            accent: parse_color(&config.accent, default.accent),
+            green: parse_color(&config.green, default.green),
+            red: parse_color(&config.red, default.red),
+            yellow: parse_color(&config.yellow, default.yellow),
+            purple: parse_color(&config.purple, default.purple),
+            cyan: parse_color(&config.cyan, default.cyan),
+            border: parse_color(&config.border, default.border),
+            selected_bg: parse_color(&config.selected_bg, default.selected_bg),
+        }
+    }
+}
+
+static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
+
+fn theme() -> &'static Theme {
+    THEME.get_or_init(Theme::default)
+}
+
+/// Applies `[theme]` before the first frame. Later calls are ignored.
+pub fn apply_theme(config: &crate::config::ThemeConfig) {
+    let _ = THEME.set(Theme::from_config(config));
+}
+
+fn parse_color(value: &str, fallback: Color) -> Color {
+    let value = value.trim();
+    if let Some(hex) = value.strip_prefix('#')
+        && hex.len() == 6
+        && let (Ok(red), Ok(green), Ok(blue)) = (
+            u8::from_str_radix(&hex[0..2], 16),
+            u8::from_str_radix(&hex[2..4], 16),
+            u8::from_str_radix(&hex[4..6], 16),
+        )
+    {
+        return Color::Rgb(red, green, blue);
+    }
+    match value.to_ascii_lowercase().as_str() {
+        "black" => Color::Black,
+        "red" => Color::Red,
+        "green" => Color::Green,
+        "yellow" => Color::Yellow,
+        "blue" => Color::Blue,
+        "magenta" => Color::Magenta,
+        "cyan" => Color::Cyan,
+        "gray" | "grey" => Color::Gray,
+        "darkgray" | "darkgrey" => Color::DarkGray,
+        "white" => Color::White,
+        "reset" => Color::Reset,
+        _ => fallback,
+    }
+}
 
 fn base_style() -> Style {
-    Style::default().fg(THEME.fg).bg(THEME.bg)
+    Style::default().fg(theme().fg).bg(theme().bg)
 }
 
 fn dim_style() -> Style {
-    Style::default().fg(THEME.dim)
+    Style::default().fg(theme().dim)
 }
 
 pub fn draw(app: &mut App, frame: &mut Frame) {
@@ -91,6 +156,12 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
     if app.search.active {
         draw_search(app, frame, area);
     }
+    if app.palette.active {
+        draw_palette(app, frame, area);
+    }
+    if let Some(input) = &app.input {
+        draw_input(frame, area, input);
+    }
     if let Some(confirm) = &app.confirm {
         draw_confirm(frame, area, confirm);
     }
@@ -110,8 +181,8 @@ fn draw_header(app: &App, frame: &mut Frame, area: Rect) {
     let mut spans = vec![Span::styled(
         " neo-ncmp ",
         Style::default()
-            .fg(THEME.bg)
-            .bg(THEME.accent)
+            .fg(theme().bg)
+            .bg(theme().accent)
             .add_modifier(Modifier::BOLD),
     )];
     for (index, screen) in Screen::ALL.iter().enumerate() {
@@ -122,15 +193,16 @@ fn draw_header(app: &App, frame: &mut Frame, area: Rect) {
                 index + 1,
                 app.library.as_ref().map_or(0, |library| library.len())
             ),
+            Screen::Playlists => format!(" {} Playlists ({}) ", index + 1, app.playlists.len()),
             _ => format!(" {} {} ", index + 1, screen.title()),
         };
         let style = if *screen == app.screen {
             Style::default()
-                .fg(THEME.bg)
-                .bg(THEME.accent)
+                .fg(theme().bg)
+                .bg(theme().accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(THEME.dim)
+            Style::default().fg(theme().dim)
         };
         spans.push(Span::styled(label, style));
     }
@@ -140,14 +212,16 @@ fn draw_header(app: &App, frame: &mut Frame, area: Rect) {
         let (label, style) = match &app.connection {
             ConnectionState::Connecting => (
                 "○ connecting".to_string(),
-                Style::default().fg(THEME.yellow),
+                Style::default().fg(theme().yellow),
             ),
-            ConnectionState::Connected(version) => {
-                (format!("● MPD {version}"), Style::default().fg(THEME.green))
-            }
-            ConnectionState::Disconnected => {
-                ("● disconnected".to_string(), Style::default().fg(THEME.red))
-            }
+            ConnectionState::Connected(version) => (
+                format!("● MPD {version}"),
+                Style::default().fg(theme().green),
+            ),
+            ConnectionState::Disconnected => (
+                "● disconnected".to_string(),
+                Style::default().fg(theme().red),
+            ),
         };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(label, style))).alignment(Alignment::Right),
@@ -160,16 +234,25 @@ fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
     match app.screen {
         Screen::Queue => draw_queue(app, frame, area),
         Screen::Library => draw_library(app, frame, area),
+        Screen::Playlists => draw_playlists(app, frame, area),
         Screen::Outputs => draw_outputs(app, frame, area),
         Screen::Stats => draw_stats(app, frame, area),
+        Screen::Lyrics => draw_lyrics(app, frame, area),
+        Screen::Visualizer => draw_visualizer(app, frame, area),
+        Screen::TagEditor => draw_tags(app, frame, area),
+        Screen::History => draw_history(app, frame, area),
     }
 }
 
 fn pane_block(title: &str, active: bool) -> Block<'static> {
-    let border = if active { THEME.accent } else { THEME.border };
+    let border = if active {
+        theme().accent
+    } else {
+        theme().border
+    };
     let title_style = if active {
         Style::default()
-            .fg(THEME.accent)
+            .fg(theme().accent)
             .add_modifier(Modifier::BOLD)
     } else {
         dim_style()
@@ -180,6 +263,14 @@ fn pane_block(title: &str, active: bool) -> Block<'static> {
 }
 
 fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
+    let (queue_area, cover_area) = if area.width >= 110 {
+        let [queue_area, cover_area] =
+            Layout::horizontal([Constraint::Min(40), Constraint::Length(40)]).areas(area);
+        (queue_area, Some(cover_area))
+    } else {
+        (area, None)
+    };
+
     let block = pane_block(
         &format!(
             "Queue — {} song{}",
@@ -188,8 +279,11 @@ fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         true,
     );
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = block.inner(queue_area);
+    frame.render_widget(block, queue_area);
+    if let Some(cover_area) = cover_area {
+        draw_cover(app, frame, cover_area);
+    }
 
     if inner.height == 0 || inner.width == 0 {
         return;
@@ -234,6 +328,82 @@ fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
             },
         );
     }
+}
+
+fn draw_cover(app: &mut App, frame: &mut Frame, area: Rect) {
+    let block = pane_block("Now Playing", false);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height < 4 || inner.width < 4 {
+        return;
+    }
+
+    let info_height = 6.min(inner.height.saturating_sub(1));
+    let art_height = inner.height.saturating_sub(info_height);
+    if art_height > 0 {
+        let art_rect = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: art_height,
+        };
+        if let Some(protocol) = app.cover_protocol.as_mut() {
+            frame.render_stateful_widget(
+                StatefulImage::new().resize(Resize::Fit(None)),
+                art_rect,
+                protocol,
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new("♪\n\nno cover art")
+                    .alignment(Alignment::Center)
+                    .style(dim_style()),
+                art_rect,
+            );
+        }
+    }
+
+    let info_rect = Rect {
+        x: inner.x,
+        y: inner.y + art_height,
+        width: inner.width,
+        height: inner.height.saturating_sub(art_height),
+    };
+    let mut lines = Vec::new();
+    if let Some(song) = &app.current {
+        lines.push(Line::from(Span::styled(
+            fit(song.display_title(), inner.width as usize),
+            Style::default()
+                .fg(theme().green)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            fit(song.display_artist(), inner.width as usize),
+            Style::default().fg(theme().fg),
+        )));
+        lines.push(Line::from(Span::styled(
+            fit(song.display_album(), inner.width as usize),
+            dim_style(),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled("Nothing playing", dim_style())));
+    }
+    if let Some(status) = &app.status
+        && let Some(audio) = status.audio
+    {
+        let detail = match status.bitrate {
+            Some(bitrate) => format!("{audio} · {bitrate} kbps"),
+            None => audio.to_string(),
+        };
+        lines.push(Line::from(Span::styled(
+            fit(&detail, inner.width as usize),
+            dim_style(),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(base_style()),
+        info_rect,
+    );
 }
 
 fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -340,6 +510,545 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
     }
 }
 
+fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
+    let [playlists_area, songs_area] =
+        Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)]).areas(area);
+    let (playlist_count, song_count) = (app.playlists.len(), app.playlist_songs.len());
+    let pane = app.playlist_pane;
+    let selected_name = app.selected_playlist_name();
+    let current_uri = app.current.as_ref().map(|song| song.uri.clone());
+
+    {
+        let playlists = &app.playlists;
+        let view = &mut app.playlists_view;
+        render_list_pane(
+            frame,
+            playlists_area,
+            "Playlists",
+            playlist_count,
+            view,
+            pane == PlaylistPane::Playlists,
+            |index| {
+                let playlist = &playlists[index];
+                let mut spans = vec![Span::raw(playlist.name.to_string())];
+                if let Some(modified) = &playlist.last_modified {
+                    spans.push(Span::styled(
+                        format!("  {}", short_date(modified)),
+                        dim_style(),
+                    ));
+                }
+                Line::from(spans)
+            },
+        );
+    }
+
+    {
+        let songs = &app.playlist_songs;
+        let view = &mut app.playlist_songs_view;
+        let title = selected_name
+            .as_deref()
+            .map(|name| format!("Songs — {name}"))
+            .unwrap_or_else(|| "Songs".into());
+        let width = songs_area.width.saturating_sub(2) as usize;
+        render_list_pane(
+            frame,
+            songs_area,
+            &title,
+            song_count,
+            view,
+            pane == PlaylistPane::Songs,
+            |index| {
+                let song = &songs[index];
+                let current = current_uri.as_ref().is_some_and(|uri| song.uri == *uri);
+                song_line(song, width, current, false)
+            },
+        );
+    }
+}
+
+fn draw_lyrics(app: &App, frame: &mut Frame, area: Rect) {
+    let source = if app.lyrics.loading {
+        "searching…".to_string()
+    } else {
+        app.lyrics
+            .doc
+            .as_ref()
+            .and_then(|doc| doc.source)
+            .map(|source| source.label().to_string())
+            .unwrap_or_default()
+    };
+    let offset = app.lyrics.offset_ms;
+    let offset_text = if offset == 0 {
+        String::new()
+    } else {
+        format!(" · offset {:+0.1}s", offset as f64 / 1000.0)
+    };
+    let title = if source.is_empty() {
+        format!("Lyrics{offset_text}")
+    } else {
+        format!("Lyrics — {source}{offset_text}")
+    };
+    let block = pane_block(&title, true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    if app.lyrics.loading {
+        frame.render_widget(
+            Paragraph::new("Looking for lyrics…")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+    let Some(doc) = &app.lyrics.doc else {
+        frame.render_widget(
+            Paragraph::new("No lyrics found for this track\n\nPress o to retry")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    };
+    if doc.is_empty() {
+        frame.render_widget(
+            Paragraph::new("Lyrics are empty\n\nPress o to retry")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+
+    if !doc.synced.is_empty() {
+        let position = app.lyrics.adjusted_position(app.effective_elapsed());
+        let active = doc.active_index(position);
+        let start = active
+            .unwrap_or(0)
+            .saturating_sub(inner.height as usize / 2);
+        let lines: Vec<Line<'static>> = doc
+            .synced
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                let style = if Some(index) == active {
+                    Style::default()
+                        .fg(theme().accent)
+                        .add_modifier(Modifier::BOLD)
+                } else if Some(index) < active {
+                    dim_style()
+                } else {
+                    Style::default().fg(theme().fg)
+                };
+                Line::from(Span::styled(line.text.clone(), style))
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(Text::from(lines))
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: false })
+                .scroll((start as u16, 0))
+                .style(base_style()),
+            inner,
+        );
+    } else if let Some(plain) = &doc.plain {
+        frame.render_widget(
+            Paragraph::new(plain.as_str())
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: false })
+                .scroll((app.lyrics.scroll as u16, 0))
+                .style(base_style()),
+            inner,
+        );
+    }
+}
+
+fn draw_visualizer(app: &mut App, frame: &mut Frame, area: Rect) {
+    let settings = &app.config.visualizer;
+    let block = pane_block(
+        &format!(
+            "Visualizer — {} Hz · {} bars",
+            settings.sample_rate, settings.bars
+        ),
+        true,
+    );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    if !settings.enabled {
+        frame.render_widget(
+            Paragraph::new("Visualizer disabled\n\nSet [visualizer] enabled = true in config.toml")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+    if let Some(error) = &app.visualizer_error {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{error}\n\nAdd an MPD fifo audio output pointed at this path"
+            ))
+            .style(dim_style())
+            .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+    if app.spectrum.is_empty() {
+        frame.render_widget(
+            Paragraph::new("Waiting for audio…")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+
+    let bars = &app.spectrum;
+    let width = inner.width as usize;
+    let height = inner.height as usize;
+    let columns = bars.len().min(width).max(1);
+    let buffer = frame.buffer_mut();
+    for x in 0..width {
+        let index = x * columns / width;
+        let value = bars.get(index).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        let bar_height = (value * height as f32).round() as usize;
+        for y in 0..bar_height {
+            if let Some(cell) =
+                buffer.cell_mut((inner.x + x as u16, inner.y + inner.height - 1 - y as u16))
+            {
+                cell.set_char('█')
+                    .set_fg(bar_color(y as f32 / height as f32));
+            }
+        }
+    }
+}
+
+fn bar_color(fraction: f32) -> Color {
+    let fraction = fraction.clamp(0.0, 1.0);
+    if fraction < 0.5 {
+        lerp_color(theme().green, theme().yellow, fraction * 2.0)
+    } else {
+        lerp_color(theme().yellow, theme().red, (fraction - 0.5) * 2.0)
+    }
+}
+
+fn lerp_color(from: Color, to: Color, t: f32) -> Color {
+    let (from_r, from_g, from_b) = rgb(from);
+    let (to_r, to_g, to_b) = rgb(to);
+    Color::Rgb(
+        lerp_u8(from_r, to_r, t),
+        lerp_u8(from_g, to_g, t),
+        lerp_u8(from_b, to_b, t),
+    )
+}
+
+fn rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb(red, green, blue) => (red, green, blue),
+        _ => (255, 255, 255),
+    }
+}
+
+fn lerp_u8(from: u8, to: u8, t: f32) -> u8 {
+    (from as f32 + (to as f32 - from as f32) * t)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+fn draw_tags(app: &mut App, frame: &mut Frame, area: Rect) {
+    let title = if app.tag_editor.dirty {
+        "Tags — unsaved changes"
+    } else {
+        "Tags"
+    };
+    let block = pane_block(title, true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let Some(song) = &app.current else {
+        frame.render_widget(
+            Paragraph::new("Nothing playing")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    };
+
+    let [path_area, list_area, message_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(2),
+    ])
+    .areas(inner);
+
+    let editable = app.config.library.music_directory.is_some() && !song.uri.contains("://");
+    let path_text = match &app.config.library.music_directory {
+        Some(directory) => format!("File: {}", directory.join(song.uri.as_ref()).display()),
+        None => "Set [library] music_directory to enable tag editing".to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(fit(&path_text, path_area.width as usize)).style(if editable {
+            dim_style()
+        } else {
+            Style::default().fg(theme().red)
+        }),
+        path_area,
+    );
+
+    let len = app.tag_editor.fields.len();
+    if len > 0 && list_area.height > 0 {
+        app.tag_editor.cursor = app.tag_editor.cursor.min(len - 1);
+        let height = list_area.height as usize;
+        let start = app
+            .tag_editor
+            .cursor
+            .saturating_sub(height.saturating_sub(1))
+            .min(len.saturating_sub(height));
+        let end = (start + height).min(len);
+        for (row, index) in (start..end).enumerate() {
+            let field = &app.tag_editor.fields[index];
+            let selected = index == app.tag_editor.cursor;
+            let line = Line::from(vec![
+                Span::styled(format!("{:<14}", field.key.label()), dim_style()),
+                Span::raw(field.value.clone()),
+            ]);
+            let style = if selected {
+                Style::default()
+                    .bg(theme().selected_bg)
+                    .fg(theme().fg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme().fg)
+            };
+            frame.render_widget(
+                Paragraph::new(line).style(style),
+                Rect {
+                    x: list_area.x,
+                    y: list_area.y + row as u16,
+                    width: list_area.width,
+                    height: 1,
+                },
+            );
+        }
+    }
+
+    let (message, style) = match &app.tag_editor.message {
+        Some((message, true)) => (message.as_str(), Style::default().fg(theme().red)),
+        Some((message, false)) => (message.as_str(), Style::default().fg(theme().green)),
+        None => ("Enter edit · w write · j/k move", dim_style()),
+    };
+    frame.render_widget(
+        Paragraph::new(fit(message, message_area.width as usize)).style(style),
+        message_area,
+    );
+}
+
+fn draw_history(app: &App, frame: &mut Frame, area: Rect) {
+    let block = pane_block("History", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    if app.history_loading {
+        frame.render_widget(
+            Paragraph::new("Loading play history…")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+    if let Some(error) = &app.history_error {
+        frame.render_widget(
+            Paragraph::new(error.as_str())
+                .style(Style::default().fg(theme().red))
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+    let Some(report) = &app.history else {
+        frame.render_widget(
+            Paragraph::new("No play history yet")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    };
+    if report.total_plays == 0 {
+        frame.render_widget(
+            Paragraph::new("No play history yet\n\nPlays are recorded after half a track")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+
+    let [totals_area, columns_area, recent_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(5),
+        Constraint::Length(10),
+    ])
+    .areas(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(
+                "{} plays · {} listened",
+                report.total_plays,
+                format_long_duration(Duration::from_secs(report.total_seconds))
+            ),
+            Style::default()
+                .fg(theme().accent)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        totals_area,
+    );
+
+    let [songs_area, artists_area, albums_area] = Layout::horizontal([
+        Constraint::Percentage(45),
+        Constraint::Percentage(25),
+        Constraint::Percentage(30),
+    ])
+    .areas(columns_area);
+    render_history_songs(frame, songs_area, report, app.history_cursor);
+    render_history_column(
+        frame,
+        artists_area,
+        "Top Artists",
+        report
+            .top_artists
+            .iter()
+            .map(|artist| (artist.plays, artist.name.clone())),
+    );
+    render_history_column(
+        frame,
+        albums_area,
+        "Top Albums",
+        report
+            .top_albums
+            .iter()
+            .map(|album| (album.plays, album.name.clone())),
+    );
+
+    let recent_block = pane_block("Recent", false);
+    let recent_inner = recent_block.inner(recent_area);
+    frame.render_widget(recent_block, recent_area);
+    let lines: Vec<Line<'static>> = report
+        .recent
+        .iter()
+        .take(recent_inner.height as usize)
+        .map(|play| {
+            Line::from(vec![
+                Span::raw(format!("{} — {}", play.title, play.artist)),
+                Span::styled(format!("  ({})", age_text(play.played_at)), dim_style()),
+            ])
+        })
+        .collect();
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(base_style()),
+        recent_inner,
+    );
+}
+
+fn render_history_songs(
+    frame: &mut Frame,
+    area: Rect,
+    report: &crate::stats::StatsReport,
+    cursor: usize,
+) {
+    let block = pane_block("Top Songs", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    if report.top_songs.is_empty() {
+        frame.render_widget(
+            Paragraph::new("—")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+    let width = inner.width as usize;
+    for (row, song) in report
+        .top_songs
+        .iter()
+        .take(inner.height as usize)
+        .enumerate()
+    {
+        let selected = row == cursor;
+        let line = Line::from(vec![
+            Span::styled(
+                format!("{:>4}  ", song.plays),
+                Style::default().fg(theme().accent),
+            ),
+            Span::raw(fit(
+                &format!("{} — {}", song.title, song.artist),
+                width.saturating_sub(6),
+            )),
+        ]);
+        let style = if selected {
+            Style::default()
+                .bg(theme().selected_bg)
+                .fg(theme().fg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme().fg)
+        };
+        frame.render_widget(
+            Paragraph::new(line).style(style),
+            Rect {
+                x: inner.x,
+                y: inner.y + row as u16,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
+}
+
+fn render_history_column(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    items: impl Iterator<Item = (u64, String)>,
+) {
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let lines: Vec<Line<'static>> = items
+        .map(|(plays, text)| {
+            Line::from(vec![
+                Span::styled(format!("{plays:>4}  "), Style::default().fg(theme().accent)),
+                Span::raw(fit(&text, inner_width.saturating_sub(6))),
+            ])
+        })
+        .collect();
+    let paragraph = if lines.is_empty() {
+        Paragraph::new("—")
+            .style(dim_style())
+            .alignment(Alignment::Center)
+    } else {
+        Paragraph::new(Text::from(lines)).style(base_style())
+    };
+    frame.render_widget(paragraph.block(pane_block(title, false)), area);
+}
+
 fn draw_outputs(app: &mut App, frame: &mut Frame, area: Rect) {
     let block = pane_block("Outputs", true);
     let inner = block.inner(area);
@@ -368,7 +1077,7 @@ fn draw_outputs(app: &mut App, frame: &mut Frame, area: Rect) {
         let output = &app.outputs[index];
         let selected = index == cursor;
         let (icon, style) = if output.enabled {
-            ("[●]", Style::default().fg(THEME.green))
+            ("[●]", Style::default().fg(theme().green))
         } else {
             ("[ ]", dim_style())
         };
@@ -431,7 +1140,7 @@ fn draw_stats(app: &App, frame: &mut Frame, area: Rect) {
         if let Some(error) = &status.error {
             lines.push(Line::from(Span::styled(
                 format!("MPD error: {error}"),
-                Style::default().fg(THEME.red),
+                Style::default().fg(theme().red),
             )));
         }
     }
@@ -441,7 +1150,7 @@ fn draw_stats(app: &App, frame: &mut Frame, area: Rect) {
         lines.push(Line::from(Span::styled(
             format!("{} — {}", song.display_artist(), song.display_title()),
             Style::default()
-                .fg(THEME.green)
+                .fg(theme().green)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(kv("Album", song.display_album().to_string()));
@@ -465,7 +1174,7 @@ fn draw_stats(app: &App, frame: &mut Frame, area: Rect) {
         lines.push(Line::from(Span::styled(
             "Library",
             Style::default()
-                .fg(THEME.accent)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(kv("Artists", stats.artists.to_string()));
@@ -520,21 +1229,21 @@ fn draw_progress(app: &App, frame: &mut Frame, area: Rect) {
                     .unwrap_or_else(|| "live".into())
             );
             let fill = match status.state {
-                PlaybackState::Playing => THEME.green,
-                PlaybackState::Paused => THEME.yellow,
-                PlaybackState::Stopped => THEME.dim,
+                PlaybackState::Playing => theme().green,
+                PlaybackState::Paused => theme().yellow,
+                PlaybackState::Stopped => theme().dim,
             };
             (ratio, label, fill)
         }
-        None => (0.0, "no track".to_string(), THEME.dim),
+        None => (0.0, "no track".to_string(), theme().dim),
     };
 
     frame.render_widget(
         Gauge::default()
             .ratio(ratio)
-            .label(Span::styled(label, Style::default().fg(THEME.fg)))
-            .gauge_style(Style::default().fg(fill).bg(THEME.selected_bg))
-            .style(Style::default().bg(THEME.bg)),
+            .label(Span::styled(label, Style::default().fg(theme().fg)))
+            .gauge_style(Style::default().fg(fill).bg(theme().selected_bg))
+            .style(Style::default().bg(theme().bg)),
         area,
     );
 }
@@ -552,8 +1261,8 @@ fn draw_now_playing(app: &App, frame: &mut Frame, area: Rect) {
                 PlaybackState::Stopped => "■",
             };
             let style = match status.state {
-                PlaybackState::Playing => Style::default().fg(THEME.green),
-                PlaybackState::Paused => Style::default().fg(THEME.yellow),
+                PlaybackState::Playing => Style::default().fg(theme().green),
+                PlaybackState::Paused => Style::default().fg(theme().yellow),
                 PlaybackState::Stopped => dim_style(),
             };
             (
@@ -613,7 +1322,7 @@ fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
                     .map(|volume| volume.to_string())
                     .unwrap_or_else(|| "n/a".into())
             ),
-            Style::default().fg(THEME.cyan),
+            Style::default().fg(theme().cyan),
         ));
         for (label, enabled) in [
             ("rep", status.repeat),
@@ -622,7 +1331,7 @@ fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
             ("cns", status.consume),
         ] {
             let style = if enabled {
-                Style::default().fg(THEME.green)
+                Style::default().fg(theme().green)
             } else {
                 dim_style()
             };
@@ -634,7 +1343,7 @@ fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
         if let Some(crossfade) = status.crossfade.filter(|value| *value > 0) {
             spans.push(Span::styled(
                 format!("xfade {crossfade}s "),
-                Style::default().fg(THEME.purple),
+                Style::default().fg(theme().purple),
             ));
         }
     } else {
@@ -707,13 +1416,13 @@ fn song_line(song: &Song, width: usize, current: bool, compact: bool) -> Line<'s
     let dim = dim_style();
     let title_style = if current {
         Style::default()
-            .fg(THEME.green)
+            .fg(theme().green)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
     let marker_style = if current {
-        Style::default().fg(THEME.green)
+        Style::default().fg(theme().green)
     } else {
         dim
     };
@@ -750,15 +1459,15 @@ fn song_line(song: &Song, width: usize, current: bool, compact: bool) -> Line<'s
 fn row_style(selected: bool, current: bool) -> Style {
     if selected {
         Style::default()
-            .bg(THEME.selected_bg)
-            .fg(THEME.fg)
+            .bg(theme().selected_bg)
+            .fg(theme().fg)
             .add_modifier(Modifier::BOLD)
     } else if current {
         Style::default()
-            .fg(THEME.green)
+            .fg(theme().green)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(THEME.fg)
+        Style::default().fg(theme().fg)
     }
 }
 
@@ -799,11 +1508,11 @@ fn render_list_pane<F>(
         let selected = active && index == cursor;
         let style = if selected {
             Style::default()
-                .bg(THEME.selected_bg)
-                .fg(THEME.fg)
+                .bg(theme().selected_bg)
+                .fg(theme().fg)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(THEME.fg)
+            Style::default().fg(theme().fg)
         };
         frame.render_widget(
             Paragraph::new(render_item(index)).style(style),
@@ -826,7 +1535,7 @@ fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {
     let rect = centered_rect(area, 100, 34);
     frame.render_widget(Clear, rect);
     let block = Block::bordered()
-        .border_style(Style::default().fg(THEME.accent))
+        .border_style(Style::default().fg(theme().accent))
         .title(Span::styled(
             format!(
                 " Search — {} matches{} ",
@@ -838,7 +1547,7 @@ fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {
                 }
             ),
             Style::default()
-                .fg(THEME.accent)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(rect);
@@ -861,11 +1570,11 @@ fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {
             Span::styled(
                 "> ",
                 Style::default()
-                    .fg(THEME.accent)
+                    .fg(theme().accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(fit(&state.query, query_width)),
-            Span::styled("█", Style::default().fg(THEME.accent)),
+            Span::styled("█", Style::default().fg(theme().accent)),
         ])),
         query_area,
     );
@@ -899,9 +1608,9 @@ fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {
         for (row, position) in (start..end).enumerate() {
             let item = &index.items[state.results[position]];
             let color = match item.kind {
-                SearchKind::Artist => THEME.purple,
-                SearchKind::Album => THEME.cyan,
-                SearchKind::Song => THEME.green,
+                SearchKind::Artist => theme().purple,
+                SearchKind::Album => theme().cyan,
+                SearchKind::Song => theme().green,
             };
             let line = Line::from(vec![
                 Span::styled(
@@ -914,11 +1623,11 @@ fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {
             ]);
             let style = if position == cursor {
                 Style::default()
-                    .bg(THEME.selected_bg)
-                    .fg(THEME.fg)
+                    .bg(theme().selected_bg)
+                    .fg(theme().fg)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(THEME.fg)
+                Style::default().fg(theme().fg)
             };
             frame.render_widget(
                 Paragraph::new(line).style(style),
@@ -946,9 +1655,9 @@ fn draw_toast(frame: &mut Frame, area: Rect, toast: &Toast) {
         return;
     }
     let (background, foreground) = match toast.level {
-        ToastLevel::Info => (THEME.accent, THEME.bg),
-        ToastLevel::Success => (THEME.green, THEME.bg),
-        ToastLevel::Error => (THEME.red, THEME.bg),
+        ToastLevel::Info => (theme().accent, theme().bg),
+        ToastLevel::Success => (theme().green, theme().bg),
+        ToastLevel::Error => (theme().red, theme().bg),
     };
     let message = format!(" {} ", toast.message);
     let width = (message.width() as u16)
@@ -972,17 +1681,150 @@ fn draw_toast(frame: &mut Frame, area: Rect, toast: &Toast) {
     );
 }
 
+fn draw_palette(app: &App, frame: &mut Frame, area: Rect) {
+    let rect = centered_rect(area, 76, 22);
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_style(Style::default().fg(theme().accent))
+        .title(Span::styled(
+            format!(" Commands — {} matches ", app.palette.results.len()),
+            Style::default()
+                .fg(theme().accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    if inner.height < 3 || inner.width == 0 {
+        return;
+    }
+    let [query_area, rule_area, list_area, footer_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let query_width = query_area.width.saturating_sub(3) as usize;
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "> ",
+                Style::default()
+                    .fg(theme().accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(fit(&app.palette.query, query_width)),
+            Span::styled("█", Style::default().fg(theme().accent)),
+        ])),
+        query_area,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(rule_area.width as usize),
+            dim_style(),
+        ))),
+        rule_area,
+    );
+
+    if app.palette.results.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No matching commands")
+                .style(dim_style())
+                .alignment(Alignment::Center),
+            list_area,
+        );
+    } else {
+        let height = list_area.height as usize;
+        let start = app
+            .palette
+            .cursor
+            .saturating_sub(height.saturating_sub(1))
+            .min(app.palette.results.len().saturating_sub(height));
+        let end = (start + height).min(app.palette.results.len());
+        for (row, position) in (start..end).enumerate() {
+            let Some(label) = app.palette.result_label(position) else {
+                continue;
+            };
+            let selected = position == app.palette.cursor;
+            let style = if selected {
+                Style::default()
+                    .bg(theme().selected_bg)
+                    .fg(theme().fg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme().fg)
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::raw(label))).style(style),
+                Rect {
+                    x: list_area.x,
+                    y: list_area.y + row as u16,
+                    width: list_area.width,
+                    height: 1,
+                },
+            );
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Enter run · Esc close · Ctrl-U clear",
+            dim_style(),
+        ))),
+        footer_area,
+    );
+}
+
+fn draw_input(frame: &mut Frame, area: Rect, input: &InputModal) {
+    let rect = centered_rect(area, 70, 7);
+    frame.render_widget(Clear, rect);
+    let width = rect.width.saturating_sub(4) as usize;
+    let text = Text::from(vec![
+        Line::from(Span::styled(
+            input.prompt.clone(),
+            Style::default().fg(theme().fg).add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+        Line::from(vec![
+            Span::styled(
+                "> ",
+                Style::default()
+                    .fg(theme().accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(fit(&input.value, width.saturating_sub(1))),
+            Span::styled("█", Style::default().fg(theme().accent)),
+        ]),
+        Line::default(),
+        Line::from(Span::styled("Enter confirm · Esc cancel", dim_style())),
+    ]);
+    frame.render_widget(
+        Paragraph::new(text).style(base_style()).block(
+            Block::bordered()
+                .title(Span::styled(
+                    " Input ",
+                    Style::default()
+                        .fg(theme().accent)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .border_style(Style::default().fg(theme().accent)),
+        ),
+        rect,
+    );
+}
+
 fn draw_confirm(frame: &mut Frame, area: Rect, confirm: &Confirm) {
     let rect = centered_rect(area, 60, 5);
     frame.render_widget(Clear, rect);
     let text = Text::from(vec![
         Line::from(Span::styled(
             confirm.message.clone(),
-            Style::default().fg(THEME.fg).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme().fg).add_modifier(Modifier::BOLD),
         )),
         Line::default(),
         Line::from(vec![
-            Span::styled("[y] yes", Style::default().fg(THEME.green)),
+            Span::styled("[y] yes", Style::default().fg(theme().green)),
             Span::raw("     "),
             Span::styled("[n] no", dim_style()),
         ]),
@@ -995,21 +1837,23 @@ fn draw_confirm(frame: &mut Frame, area: Rect, confirm: &Confirm) {
                 Block::bordered()
                     .title(Span::styled(
                         " Confirm ",
-                        Style::default().fg(THEME.red).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme().red)
+                            .add_modifier(Modifier::BOLD),
                     ))
-                    .border_style(Style::default().fg(THEME.red)),
+                    .border_style(Style::default().fg(theme().red)),
             ),
         rect,
     );
 }
 
 fn draw_help(frame: &mut Frame, area: Rect) {
-    let rect = centered_rect(area, 82, 30);
+    let rect = centered_rect(area, 90, 42);
     frame.render_widget(Clear, rect);
 
     let key = |keys: &'static str, description: &'static str| {
         Line::from(vec![
-            Span::styled(format!("  {keys:<9}"), Style::default().fg(THEME.accent)),
+            Span::styled(format!("  {keys:<9}"), Style::default().fg(theme().accent)),
             Span::raw(description),
         ])
     };
@@ -1017,16 +1861,16 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(
             title,
             Style::default()
-                .fg(THEME.purple)
+                .fg(theme().purple)
                 .add_modifier(Modifier::BOLD),
         ))
     };
 
     let lines = vec![
         heading("Global"),
-        key("?", "toggle this help"),
+        key("? :", "help / command palette"),
         key("q", "quit"),
-        key("Tab 1-4", "next screen / jump to screen"),
+        key("Tab 1-9", "next screen / jump to screen"),
         key("R", "reload MPD state and library"),
         heading("Playback"),
         key("space p", "play or pause"),
@@ -1046,10 +1890,23 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         key("h l", "previous / next pane"),
         key("Enter", "append selection and play"),
         key("a A", "append / replace queue and play"),
+        heading("Playlists"),
+        key("h l", "playlists / songs pane"),
+        key("Enter", "replace queue and play"),
+        key("a", "append to queue"),
+        key("S e x", "save queue / rename / delete"),
+        key("d J K", "remove / move song"),
         heading("Outputs"),
         key("Enter", "enable or disable output"),
-        Line::from(""),
-        Line::from(Span::styled("  press any key to close ", dim_style())),
+        heading("Lyrics"),
+        key("o", "fetch lyrics again"),
+        key("[ ]", "offset -0.5s / +0.5s"),
+        heading("Visualizer"),
+        key("7", "spectrum screen"),
+        heading("Tags"),
+        key("8", "tag editor"),
+        key("Enter", "edit selected field"),
+        key("w", "write tags (creates a backup)"),
     ];
 
     frame.render_widget(
@@ -1058,10 +1915,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
                 .title(Span::styled(
                     " Help ",
                     Style::default()
-                        .fg(THEME.accent)
+                        .fg(theme().accent)
                         .add_modifier(Modifier::BOLD),
                 ))
-                .border_style(Style::default().fg(THEME.accent)),
+                .border_style(Style::default().fg(theme().accent)),
         ),
         rect,
     );
@@ -1083,6 +1940,10 @@ fn kv(label: &str, value: impl Into<String>) -> Line<'static> {
         Span::styled(format!("{label:<14}"), dim_style()),
         Span::raw(value.into()),
     ])
+}
+
+fn short_date(value: &str) -> String {
+    value.get(..10).unwrap_or(value).to_string()
 }
 
 fn format_long_duration(duration: Duration) -> String {
@@ -1136,6 +1997,17 @@ mod tests {
     #[test]
     fn compact_rows_leave_room_for_the_title() {
         assert_eq!(40usize.saturating_sub(15) + 15, 40);
+    }
+
+    #[test]
+    fn parses_theme_colors() {
+        assert_eq!(
+            parse_color("#112233", Color::Reset),
+            Color::Rgb(0x11, 0x22, 0x33)
+        );
+        assert_eq!(parse_color("red", Color::Reset), Color::Red);
+        assert_eq!(parse_color("bogus", Color::Yellow), Color::Yellow);
+        assert_eq!(parse_color("#xyzxyz", Color::Yellow), Color::Yellow);
     }
 
     #[test]

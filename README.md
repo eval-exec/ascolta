@@ -2,49 +2,60 @@
 
 A modern, feature-rich terminal client for [MPD](https://www.musicpd.org/), written in Rust.
 
-The goal is ncmpcpp muscle memory with a new, asynchronous core: instant fuzzy search,
-live `idle` updates, non-blocking library indexing, and a UI designed to stay responsive
-on libraries far larger than a few thousand songs. MPD remains the playback engine;
-neo-ncmp is a first-class controller.
-
-> Status: early, but already usable as a daily driver for queue management, library
-> browsing, and fuzzy search. See [ROADMAP.md](ROADMAP.md) for what is next.
+The goal is ncmpcpp muscle memory with a new asynchronous core: live `idle` updates,
+non-blocking library indexing, instant fuzzy search, terminal album art, synced lyrics,
+MPRIS, scrobbling, and an interactive play history. MPD remains the playback engine;
+neo-ncmp is a first-class controller and desktop citizen.
 
 ```
- neo-ncmp  1 Queue (82)  2 Library (5955)  3 Outputs  4 Stats              ● MPD 0.24.0
-┌ Queue — 82 songs ──────────────────────────────────────────────────────────────────────┐
-│     # Title                                  Artist              Album          Time   │
-│     6 Dissolved Girl                         Massive Attack      Mezzanine       6:06   │
-│▶    3 A Thousand Years                       Unknown Artist      Unknown Album   3:04   │
-│     4 Azaleh & Eikona - In Aeternum          Unknown Artist      Unknown Album   4:49   │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-                                              0:00 / 3:04
+ neo-ncmp  1 Queue (82)  2 Library (5955)  3 Playlists (1)  4 Outputs  5 Stats
+           6 Lyrics  7 Visualizer  8 Tags  9 History                    ● MPD 0.24.0
+┌ Queue — 82 songs ──────────────────────────────┐┌ Now Playing ──────────────────┐
+│     # Title                  Artist      Time  ││ ▀▀▄▄▄▄▄▄▄▄▄▄▀▀▀▀▄▄▄▀         │
+│     6 Dissolved Girl         Massive     6:06  ││ ▀▀▀▀▀▀▀▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▄▀▄▄▀  │
+│▶    3 A Thousand Years       Unknown     3:04  ││ ▀▀▀▀▀▀▀▀▀▀▄▀▀▄▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+└────────────────────────────────────────────────┘│ Massive Attack — Dissolved…  │
+                                                  └───────────────────────────────┘
+                                      0:00 / 3:04
 ■ Unknown Artist — A Thousand Years
- vol 100% rep● rnd○ sgl○ cns○                              ? help  q quit  space play
+ vol 100% rep● rnd○ sgl○ cns○           ? help  : palette  / search  q quit
 ```
 
 ## Features
 
-Current:
+**Playback and queue**
 
-- Async MPD protocol client (typed commands, `idle`, binary album art, reconnect with backoff)
-- Queue editor: play, remove, reorder, clear (with confirmation), shuffle
-- Library browser: artists → albums → tracks, grouped by album artist
-- Library-wide fuzzy search (`/`) powered by `nucleo-matcher`, with a coalescing background worker
+- Async MPD client with typed commands, `idle`, reconnect with backoff, password auth
+- Queue editor: play, remove, reorder, clear with confirmation, shuffle
 - Transport, seek, volume, repeat/random/single/consume
-- Outputs and server/current-track statistics
-- Live updates driven by MPD `idle`, plus interpolated progress between updates
-- Viewport-only rendering, so large libraries do not cost a frame per item
-- TOML configuration, file logging, optional MPD password
+- Interpolated progress between MPD updates
 
-Planned: stored playlists, album art, synced lyrics, MPRIS/media keys, desktop
-notifications, Last.fm/ListenBrainz, a visualizer, a tag editor, smart playlists,
-configurable keymaps/themes/layouts, and a remote CLI. See [ROADMAP.md](ROADMAP.md).
+**Library**
+
+- Artist → album → track browser, case-insensitive, grouped by album artist
+- Library-wide fuzzy search (`/`) using `nucleo-matcher`, run on a coalescing worker
+- Stored playlists: browse, load/play, append, save queue as, rename, delete, edit songs
+- Command palette (`:`) for every global action
+- Session restore: last screen, cursors, playlists pane, lyrics offset
+- SQLite play history: top songs/artists/albums, recent plays, play a top song with Enter
+
+**Modern extras**
+
+- Album art in the terminal (Kitty/Sixel/iTerm2/halfblocks) with background fetch and cache
+- Synced lyrics from local `.lrc` or LRCLIB, active-line highlight, `[`/`]` offset
+- MPRIS server: media keys, `playerctl`, desktop widgets; released cleanly on exit
+- Desktop notifications on track change
+- ListenBrainz and Last.fm scrobbling with offline retry queue
+- Real-time spectrum visualizer from an MPD FIFO output
+- Tag editor with full-file backups and confirmation before writing
+- Remote CLI and machine-readable `status --json` for status bars
+- Configurable keymap (global + per-screen overrides) and theme colors
 
 ## Requirements
 
-- Rust **1.88+** (edition 2024)
-- MPD **0.23+** recommended (developed and tested against MPD 0.24)
+- Rust **1.89+** (edition 2024)
+- MPD **0.23+** recommended (developed against MPD 0.24)
+- Linux for MPRIS/desktop notifications; the TUI and remote CLI are otherwise portable
 
 ## Build and run
 
@@ -53,57 +64,76 @@ cargo build --release
 ./target/release/neo-ncmp
 ```
 
-Or during development:
+or during development:
 
 ```sh
 just run
 ```
 
-A non-interactive connectivity check is available:
+### CLI
 
 ```sh
-neo-ncmp --check
+neo-ncmp                       # TUI
+neo-ncmp --check               # connectivity/library summary, no TUI
+neo-ncmp check                 # same as a subcommand
+neo-ncmp status                # one-line playback status
+neo-ncmp status --json         # JSON for Waybar/polybar/scripts
+neo-ncmp remote toggle         # play/pause, no TUI
+neo-ncmp remote next
+neo-ncmp remote previous
+neo-ncmp remote stop
+neo-ncmp remote volume +5      # or -5, or an absolute 0-100
+neo-ncmp remote seek +10       # seconds, absolute or relative
+neo-ncmp remote repeat toggle  # on | off | toggle
+neo-ncmp remote random on
+neo-ncmp remote single toggle
+neo-ncmp remote consume off
+neo-ncmp remote shuffle
+neo-ncmp remote clear
+neo-ncmp remote playlist "Late Night"
+neo-ncmp remote output 0 on
+neo-ncmp remote status --json
 ```
 
-It connects to MPD, prints the server version, library counts, current track, and
-whether embedded cover art is present, then exits without entering the TUI.
+Global flags (`--host`, `--port`, `--config`) work before or after subcommands.
 
 ## Configuration
 
-The default path is `~/.config/neo-ncmp/config.toml`:
+Default path: `~/.config/neo-ncmp/config.toml`. See [config.example.toml](config.example.toml)
+for every option. A minimal setup:
 
 ```toml
 [mpd]
 host = "127.0.0.1"
 port = 6600
-# password = "secret"
+
+[library]
+music_directory = "/home/you/Music"
 
 [ui]
-tick_rate_ms = 250
-start_screen = "queue"   # queue | library | outputs | stats
-follow_now_playing = false
+start_screen = "queue"
 ```
 
-See [config.example.toml](config.example.toml). Command-line overrides:
+Config is layered: defaults → file → CLI flags. Environment overrides:
+`NEO_NCMP_MPD_HOST`, `NEO_NCMP_MPD_PORT`, `NEO_NCMP_LISTENBRAINZ_TOKEN`,
+`NEO_NCMP_LASTFM_API_KEY`, `NEO_NCMP_LASTFM_API_SECRET`,
+`NEO_NCMP_LASTFM_SESSION_KEY`.
 
-```sh
-neo-ncmp --host music.local --port 6600
-neo-ncmp --config ./my-config.toml
-```
-
-Environment overrides (useful for one-off runs): `NEO_NCMP_MPD_HOST`,
-`NEO_NCMP_MPD_PORT`.
-
-Logs are written to `~/.local/state/neo-ncmp/neo-ncmp.log` (daily rotation; never
-stdout, so the TUI is not corrupted). Set `RUST_LOG=debug` for more detail.
+Logs: `~/.local/state/neo-ncmp/neo-ncmp.log` (daily rotation, never stdout).
+Set `RUST_LOG=debug` for detail.
 
 ## Key bindings
 
+Defaults match ncmpcpp where practical. Every binding is overridable under
+`[keys.<context>]`; use `"none"` to unbind.
+
 | Keys | Action |
 | --- | --- |
-| `?` | Toggle help |
+| `?` | Toggle help (full list) |
+| `:` | Command palette |
+| `/` | Fuzzy search the library |
 | `q`, `Ctrl-C` | Quit |
-| `1`–`4` | Queue / Library / Outputs / Stats |
+| `1`–`9` | Queue / Library / Playlists / Outputs / Stats / Lyrics / Visualizer / Tags / History |
 | `Tab`, `Shift-Tab` | Next / previous screen |
 | `j` `k`, arrows | Move cursor |
 | `Ctrl-D` / `Ctrl-U` | Half-page down / up |
@@ -112,27 +142,120 @@ stdout, so the TUI is not corrupted). Set `RUST_LOG=debug` for more detail.
 | `s` | Stop |
 | `>` `.` `n` / `<` `,` `N` | Next / previous track |
 | `f` / `b` | Seek +5s / -5s |
-| `+` / `-` | Volume up / down |
+| `+` / `-` | Volume |
 | `r` `z` `x` `c` | Repeat / random / single / consume |
-| `/` | Fuzzy search the library |
-| `Enter` | Play selection |
+| `Enter` | Play selection / edit tag field on Tags |
 | `a` / `A` (library) | Append / replace queue and play |
-| `d` (queue) | Remove selected |
-| `J` / `K` (queue) | Move selected down / up |
+| `d` (queue/playlists) | Remove selected |
+| `J` / `K` (queue/playlists) | Move selected down / up |
 | `C` / `S` (queue) | Clear (confirms) / shuffle |
-| `h` / `l` (library) | Previous / next pane |
+| `S` `e` `x` (playlists) | Save queue as / rename / delete |
+| `h` / `l` (library/playlists) | Previous / next pane |
+| `w` (tags) | Write tags to disk (backs up first) |
+| `o` `[` `]` (lyrics) | Refetch / offset -0.5s / +0.5s |
+| `Enter` (history) | Queue the selected most-played song |
 | `Enter` (outputs) | Toggle output |
-| `R` | Reload MPD state and library |
+| `R` | Reload state/library (or History) |
 
-In search: type to filter, `Up`/`Down` to select, `Enter` to append and play,
-`Ctrl-U` to clear, `Esc` to close. Typing is never blocked by matching; results are
-computed on a background worker and stale responses are discarded.
+Example override:
+
+```toml
+[keys.global]
+"ctrl+j" = "next_track"
+":" = "palette"
+
+[keys.queue]
+"d" = "play_selected"
+"S" = "none"
+```
+
+## Integrations
+
+### MPRIS and media keys
+
+Started automatically. Verify with:
+
+```sh
+busctl --user list | grep org.mpris.MediaPlayer2.neo-ncmp
+busctl --user call org.mpris.MediaPlayer2.neo-ncmp /org/mpris/MediaPlayer2 \
+  org.freedesktop.DBus.Properties Get ss org.mpris.MediaPlayer2.Player PlaybackStatus
+```
+
+If no D-Bus session is available the TUI still runs; a warning is logged.
+
+### Notifications
+
+Set `[ui] notifications = true`. Uses the desktop notification service via
+`notify-rust`.
+
+### Scrobbling
+
+```toml
+[scrobbling]
+enabled = true
+listenbrainz_token = "…"
+# Last.fm requires an API key/secret and a session key obtained out of band:
+lastfm_api_key = "…"
+lastfm_api_secret = "…"
+lastfm_session_key = "…"
+```
+
+ListenBrainz `playing_now` is sent when a track starts; a scrobble is sent after
+half the track or four minutes, whichever comes first. Failed scrobbles are queued
+in `~/.local/state/neo-ncmp/scrobble-queue.jsonl` and retried on the next start.
+
+### Visualizer
+
+Add a FIFO output to MPD:
+
+```mpd
+audio_output {
+    type "fifo"
+    name "neo-ncmp visualizer"
+    path "/tmp/mpd.fifo"
+    format "44100:16:2"
+}
+```
+
+Then:
+
+```toml
+[visualizer]
+enabled = true
+fifo = "/tmp/mpd.fifo"
+sample_rate = 44100
+channels = 2
+bits = 16
+bars = 64
+```
+
+On NixOS the MPD config is generated by the Nix module; edit that instead of the
+store path. neo-ncmp opens the FIFO at startup so MPD's FIFO output does not block.
+Only 16-bit PCM is supported today.
+
+### Album art
+
+Embedded art is read via MPD's `readpicture`, with `albumart` as a fallback for
+folder art. Under tmux, Kitty/Sixel passthrough needs `allow-passthrough on`;
+otherwise the halfblock renderer is used automatically.
+
+### Tag editing
+
+Set `[library] music_directory`. The editor requires a confirmation and copies the
+original file to `~/.local/state/neo-ncmp/tag-backups/` before writing. If the copy
+fails, the write is aborted. After a successful write MPD is asked to rescan the
+track.
+
+### Lyrics
+
+Local `.lrc` files next to the track are preferred; otherwise LRCLIB is queried.
+Network failures are non-fatal. Use `o` to retry and `[`/`]` to adjust sync.
 
 ## Design
 
 ```
-       crossterm events ─┐  MPD idle ─┐  ticks ─┐
-                        └────────────┴─────────┘
+       crossterm events ─┐  MPD idle ─┐  ticks ─┐  palette/search workers ─┐
+                        └────────────┴─────────┴──────────────────────────┘
                                        │ Msg
                               ┌────────▼─────────┐
                               │    App state     │
@@ -144,60 +267,55 @@ computed on a background worker and stale responses are discarded.
                          │ command conn │  │ screens      │
                          └──────┬───────┘  └──────────────┘
                                 ▼
-                        idle watcher (separate connection)
+                    idle / artwork / lyrics / tag / history tasks
 ```
 
 - **One writer to MPD.** Commands are serialised through an actor; the UI sends
   intentions and never awaits I/O.
-- **Separate `idle` connection.** MPD's one-command-in-flight rule is respected;
-  changes are pushed into the app as messages.
-- **Pure-ish state transitions.** `App::on_msg` and `App::on_key` are testable
-  without a terminal; inputs map to an `Action` enum, not to hard-coded keys.
-- **Viewport rendering.** Song lists render only the visible rows and handle
-  wide/CJK glyphs with display-width-aware padding.
-- **Background search.** `SearchIndex::score` is a pure function run on
-  `spawn_blocking`; a generation counter discards stale results.
-- **Fail safe.** The terminal is restored on panic via `ratatui::init`'s hook;
-  MPD disconnect shows a banner and reconnects with backoff.
+- **Separate `idle` connection**, re-synced after reconnects.
+- **Background workers** for fuzzy search, artwork, lyrics, tag writes, scrobble
+  queue, history queries, and the visualizer. Nothing slow runs on the render path.
+- **Action-based keymap** with global and per-screen layers, parsed from TOML.
+- **Viewport rendering** and width-aware text so 100k-song libraries stay responsive.
+- **Fail safe.** Panic hook and SIGTERM/SIGINT handling restore the terminal;
+  MPD disconnects show a banner and reconnect with backoff.
 
 ### Workspace
 
 ```
 crates/
-  neo-ncmp/          binary: event loop, screens, UI, config, search, workers
-  neo-ncmp-domain/   Song/MpdStatus/Library/Filter-friendly models, no I/O
+  neo-ncmp/          binary: event loop, screens, UI, config, workers
+  neo-ncmp-domain/   Song/MpdStatus/Library models, no I/O
   neo-ncmp-mpd/      async MPD protocol client, mock-tested, no TUI dependency
 ```
 
 ## Development
 
 ```sh
-just fmt        # cargo fmt
-just check      # cargo check
-just clippy     # clippy with -D warnings
-just test       # nextest + doc tests
-just live-test  # integration tests against a real MPD on 127.0.0.1:6600
-just run
+just fmt
+just check
+just clippy     # -D warnings
+just test       # nextest + doctests
+just live-test  # against a real MPD
+just check-mpd  # --check
 ```
 
-Tests include:
+Tests cover protocol framing (including binary chunks containing newlines),
+mock-server integration, live MPD, domain grouping/sorting, fuzzy ranking, LRC
+parsing, scrobble payloads and signatures, SQLite aggregation, keymap parsing,
+PCM decoding/FFT bands, UI snapshots via `TestBackend`, tag writing with an
+`ffmpeg`-generated fixture (ignored), and LRCLIB fetching (ignored).
 
-- MPD protocol framing, including binary chunks whose payload contains newlines
-- Mock-server integration for status, queue, idle, errors, and `readpicture`
-- A live, `#[ignore]`d test against a real daemon
-- Domain grouping/sorting and fuzzy search ranking
-- Keypress → command tests (pause, volume, queue removal, library enqueue)
-- List scrolling and width-aware text fitting
+## Limitations
 
-Set `MPD_HOST` / `MPD_PORT` to point the live tests at a different server.
+- The library is grouped by **AlbumArtist**; MPD stats count distinct `Artist`
+  tags, so counts differ on compilations.
+- The visualizer requires an MPD FIFO output (or a future PipeWire capture mode).
+- Online cover-art lookup and Last.fm's browser auth flow are not implemented yet.
+- Tag editing writes tags only; embedded art editing is not exposed yet.
+- MPRIS/notifications are Linux-oriented.
 
-## Notes and limitations
-
-- The library is grouped by **AlbumArtist**, then album. MPD's own stats count
-  distinct `Artist` tags, so the two counts can differ on compilations.
-- Album art, lyrics, the visualizer, MPRIS, and tag editing are not implemented yet.
-- The visualizer will need either an MPD FIFO output (a change to the MPD
-  configuration) or PipeWire monitor capture.
+See [ROADMAP.md](ROADMAP.md) for what's next.
 
 ## License
 

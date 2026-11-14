@@ -1,0 +1,128 @@
+.TH NEO-NCMP 1 "2026-11-15" "neo-ncmp 0.1.0" "User Commands"
+.SH NAME
+neo-ncmp \- modern, feature-rich terminal client for MPD
+.SH SYNOPSIS
+.B neo-ncmp
+[\fIOPTIONS\fR] [\fICOMMAND\fR]
+.SH DESCRIPTION
+.B neo-ncmp
+is a terminal music client for the Music Player Daemon (MPD). It keeps the
+keyboard conventions of ncmpcpp while providing asynchronous library indexing,
+live idle updates, fuzzy search, terminal album art, synced lyrics, MPRIS,
+scrobbling, a play history, a tag editor, and a real-time visualizer.
+.PP
+With no command it starts the TUI. MPD remains responsible for playback.
+.SH OPTIONS
+.TP
+.B \-\-host \fIHOST\fR
+Override the configured MPD host.
+.TP
+.B \-\-port \fIPORT\fR
+Override the configured MPD port.
+.TP
+.B \-\-config \fIPATH\fR
+Use an explicit TOML configuration file.
+.TP
+.B \-\-check
+Connect to MPD, print a summary, and exit without starting the TUI.
+.SH COMMANDS
+.TP
+.B check
+Same as \fB\-\-check\fR.
+.TP
+.B status [\-\-json]
+Print the current playback state. With \fB\-\-json\fR, emit a machine-readable
+object suitable for status bars.
+.TP
+.B remote \fIACTION\fR
+Control MPD without starting the TUI.
+.SH REMOTE ACTIONS
+.TP
+.B play, pause, toggle, stop, next, previous
+Transport control.
+.TP
+.B volume \fIVALUE\fR
+Absolute 0\-100 or relative with \fB+\fR/\fB\-\fR, e.g. \fB+5\fR.
+.TP
+.B seek \fISECONDS\fR
+Absolute or relative (\fB+10\fR / \fB\-10\fR) seek.
+.TP
+.B repeat|random|single|consume \fIon|off|toggle\fR
+Player options.
+.TP
+.B shuffle, clear
+Queue operations.
+.TP
+.B playlist \fINAME\fR
+Replace the queue with a stored playlist and play it.
+.TP
+.B output \fIID\fR \fIon|off\fR
+Enable or disable an audio output.
+.TP
+.B status [\-\-json]
+Playback status.
+.SH CONFIGURATION
+The default configuration file is
+.IR ~/.config/neo-ncmp/config.toml .
+See \fIconfig.example.toml\fR in the distribution for all sections
+(\fBmpd\fR, \fBui\fR, \fBlibrary\fR, \fBvisualizer\fR, \fBscrobbling\fR,
+\fBstats\fR, \fBkeys\fR, \fBtheme\fR).
+.SH KEYS
+.TP
+.B ?, :, /
+Help, command palette, and fuzzy library search.
+.TP
+.B 1\-9, Tab, Shift-Tab
+Queue, Library, Playlists, Outputs, Stats, Lyrics, Visualizer, Tags, History;
+next/previous screen.
+.TP
+.B j k, arrows, g G, Ctrl-D Ctrl-U
+Navigation, first/last, page movement.
+.TP
+.B space, p, s, >, <, f, b, +, \-
+Play/pause, stop, next/previous, seek, volume.
+.TP
+.B r z x c
+Repeat, random, single, consume.
+.TP
+.B Enter
+Play selection; on Tags, edit the selected field.
+.PP
+All bindings are configurable in the \fB[keys.<context>]\fR tables; use
+\fB"none"\fR to unbind.
+.SH FILES
+.TP
+.I ~/.config/neo-ncmp/config.toml
+Configuration.
+.TP
+.I ~/.local/state/neo-ncmp/neo-ncmp.log
+Daily-rotated log file.
+.TP
+.I ~/.local/state/neo-ncmp/session.json
+UI session state.
+.TP
+.I ~/.local/state/neo-ncmp/neo-ncmp.db
+SQLite play history.
+.TP
+.I ~/.local/state/neo-ncmp/tag-backups/
+Pre-write copies of edited audio files.
+.TP
+.I ~/.local/state/neo-ncmp/scrobble-queue.jsonl
+Offline scrobble retry queue.
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Tracing filter (default: \fBinfo\fR).
+.TP
+.B NEO_NCMP_MPD_HOST, NEO_NCMP_MPD_PORT
+Connection overrides.
+.TP
+.B NEO_NCMP_LISTENBRAINZ_TOKEN, NEO_NCMP_LASTFM_API_KEY,
+NEO_NCMP_LASTFM_API_SECRET, NEO_NCMP_LASTFM_SESSION_KEY
+Scrobbling credentials.
+.SH SEE ALSO
+.BR mpd (1),
+.BR mpc (1),
+.BR ncmpcpp (1)
+.SH LICENSE
+MIT.

@@ -5,7 +5,7 @@ members = ["crates/neo-ncmp", "crates/neo-ncmp-domain", "crates/neo-ncmp-mpd"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/eval-exec/neo-ncmp"
 
@@ -21,6 +21,7 @@ tokio = { version = "1", features = [
     "time",
     "signal",
     "io-util",
+    "fs",
 ] }
 thiserror = "2"
 tracing = "0.1"

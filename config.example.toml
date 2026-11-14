@@ -5,16 +5,77 @@ host = "127.0.0.1"
 port = 6600
 
 # MPD servers configured with `password_file` need this. It is sent on every
-# connection (command, idle, and library-loading connections).
+# connection (command, idle, library-loading, and artwork connections).
 # password = "secret"
 
 [ui]
-# Event loop tick. Also controls how often the progress bar interpolates and
-# how frequently status is refreshed while playing.
+# Event loop tick. Also controls progress interpolation and status refresh.
 tick_rate_ms = 250
 
-# queue | library | outputs | stats
+# queue | library | playlists | outputs | stats | lyrics | visualizer | tags | history
 start_screen = "queue"
 
 # Move the queue cursor to the playing song as tracks change.
 follow_now_playing = false
+
+# Desktop notification on track change.
+notifications = false
+
+# Restore the last screen, cursors, and lyrics offset on start.
+restore_session = true
+
+[library]
+# Root of MPD's music directory. Required for local .lrc files and tag editing.
+music_directory = "/home/you/Music"
+
+[visualizer]
+# Requires an MPD fifo audio output pointed at `fifo` (see README).
+enabled = false
+fifo = "/tmp/mpd.fifo"
+sample_rate = 44100
+channels = 2
+bits = 16
+bars = 64
+
+[scrobbling]
+# Disabled by default. Tokens can also come from environment variables:
+# NEO_NCMP_LISTENBRAINZ_TOKEN, NEO_NCMP_LASTFM_API_KEY,
+# NEO_NCMP_LASTFM_API_SECRET, NEO_NCMP_LASTFM_SESSION_KEY
+enabled = false
+listenbrainz_token = ""
+lastfm_api_key = ""
+lastfm_api_secret = ""
+lastfm_session_key = ""
+
+[stats]
+# Record plays into ~/.local/state/neo-ncmp/neo-ncmp.db (History screen).
+enabled = true
+
+# Key overrides. Sections are `global`, `queue`, `library`, `playlists`,
+# `outputs`, `stats`, `lyrics`, `visualizer`, `tags`, `history`.
+# Use "none" to unbind. Key specs support ctrl+, alt+, shift+, named keys
+# (space, tab, enter, esc, arrows, pageup/pagedown, home/end), and symbols.
+[keys.global]
+# "ctrl+j" = "next_track"
+# ":" = "palette"
+
+[keys.queue]
+# "d" = "play_selected"
+
+[keys.library]
+# "enter" = "play_selected"
+
+[theme]
+# Hex (#rrggbb) or ANSI names: black, red, green, yellow, blue, magenta,
+# cyan, gray, darkgray, white, reset.
+bg = "#1a1b26"
+fg = "#c0caf5"
+dim = "#565f89"
+accent = "#7aa2f7"
+green = "#9ece6a"
+red = "#f7768e"
+yellow = "#e0af68"
+purple = "#bb9af7"
+cyan = "#7dcfff"
+border = "#3b4267"
+selected_bg = "#283457"

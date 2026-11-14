@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -9,6 +10,13 @@ use serde::Deserialize;
 pub struct Config {
     pub mpd: MpdConfig,
     pub ui: UiConfig,
+    pub library: LibraryConfig,
+    pub visualizer: VisualizerConfig,
+    pub scrobbling: ScrobblingConfig,
+    pub stats: StatsConfig,
+    /// `[keys.<context>]` tables: key spec -> action name.
+    pub keys: HashMap<String, HashMap<String, String>>,
+    pub theme: ThemeConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,6 +47,10 @@ pub struct UiConfig {
     pub start_screen: String,
     /// Keep the queue cursor on the playing song as tracks change.
     pub follow_now_playing: bool,
+    /// Show a desktop notification on track change.
+    pub notifications: bool,
+    /// Restore the screen, cursors, and lyrics offset on start.
+    pub restore_session: bool,
 }
 
 impl Default for UiConfig {
@@ -47,6 +59,111 @@ impl Default for UiConfig {
             tick_rate_ms: 250,
             start_screen: "queue".into(),
             follow_now_playing: false,
+            notifications: false,
+            restore_session: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LibraryConfig {
+    /// Root of MPD's music directory. Used for local `.lrc` files and, later,
+    /// tag editing. Optional; remote lyrics still work without it.
+    pub music_directory: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct VisualizerConfig {
+    /// Requires an MPD `fifo` audio output pointed at the same path.
+    pub enabled: bool,
+    pub fifo: PathBuf,
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub bits: u8,
+    pub bars: usize,
+}
+
+impl Default for VisualizerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            fifo: PathBuf::from("/tmp/mpd.fifo"),
+            sample_rate: 44_100,
+            channels: 2,
+            bits: 16,
+            bars: 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ScrobblingConfig {
+    pub enabled: bool,
+    pub listenbrainz_token: String,
+    pub lastfm_api_key: String,
+    pub lastfm_api_secret: String,
+    pub lastfm_session_key: String,
+}
+
+impl ScrobblingConfig {
+    pub fn listenbrainz_enabled(&self) -> bool {
+        self.enabled && !self.listenbrainz_token.is_empty()
+    }
+
+    pub fn lastfm_enabled(&self) -> bool {
+        self.enabled
+            && !self.lastfm_api_key.is_empty()
+            && !self.lastfm_api_secret.is_empty()
+            && !self.lastfm_session_key.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct StatsConfig {
+    /// Record completed plays in the local SQLite history.
+    pub enabled: bool,
+}
+
+impl Default for StatsConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ThemeConfig {
+    pub bg: String,
+    pub fg: String,
+    pub dim: String,
+    pub accent: String,
+    pub green: String,
+    pub red: String,
+    pub yellow: String,
+    pub purple: String,
+    pub cyan: String,
+    pub border: String,
+    pub selected_bg: String,
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            bg: "#1a1b26".into(),
+            fg: "#c0caf5".into(),
+            dim: "#565f89".into(),
+            accent: "#7aa2f7".into(),
+            green: "#9ece6a".into(),
+            red: "#f7768e".into(),
+            yellow: "#e0af68".into(),
+            purple: "#bb9af7".into(),
+            cyan: "#7dcfff".into(),
+            border: "#3b4267".into(),
+            selected_bg: "#283457".into(),
         }
     }
 }
@@ -91,6 +208,18 @@ impl Config {
         {
             self.mpd.port = port;
         }
+        if let Ok(token) = std::env::var("NEO_NCMP_LISTENBRAINZ_TOKEN") {
+            self.scrobbling.listenbrainz_token = token;
+        }
+        if let Ok(key) = std::env::var("NEO_NCMP_LASTFM_API_KEY") {
+            self.scrobbling.lastfm_api_key = key;
+        }
+        if let Ok(secret) = std::env::var("NEO_NCMP_LASTFM_API_SECRET") {
+            self.scrobbling.lastfm_api_secret = secret;
+        }
+        if let Ok(session) = std::env::var("NEO_NCMP_LASTFM_SESSION_KEY") {
+            self.scrobbling.lastfm_session_key = session;
+        }
     }
 
     pub fn mpd_addr(&self) -> String {
@@ -130,12 +259,45 @@ mod tests {
             [ui]
             tick_rate_ms = 100
             start_screen = "library"
+
+            [library]
+            music_directory = "/home/me/Music"
+
+            [visualizer]
+            enabled = true
+            fifo = "/tmp/test.fifo"
+            bars = 32
+
+            [scrobbling]
+            enabled = true
+            listenbrainz_token = "token"
+
+            [keys.queue]
+            "d" = "play_selected"
+
+            [keys.global]
+            "ctrl+j" = "next_track"
+
+            [theme]
+            accent = '#ff00ff'
             "#,
         )
         .unwrap();
         assert_eq!(config.mpd_addr(), "music.local:7777");
         assert_eq!(config.ui.start_screen, "library");
         assert!(!config.ui.follow_now_playing);
+        assert_eq!(
+            config.library.music_directory.as_deref(),
+            Some(std::path::Path::new("/home/me/Music"))
+        );
+        assert!(config.visualizer.enabled);
+        assert_eq!(config.visualizer.bars, 32);
+        assert!(config.scrobbling.listenbrainz_enabled());
+        assert!(!config.scrobbling.lastfm_enabled());
+        assert_eq!(config.keys["queue"]["d"], "play_selected");
+        assert_eq!(config.keys["global"]["ctrl+j"], "next_track");
+        assert_eq!(config.theme.accent, "#ff00ff");
+        assert_eq!(config.theme.bg, "#1a1b26");
     }
 
     #[test]

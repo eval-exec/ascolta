@@ -4,11 +4,16 @@
 //! connection and reconnects it with backoff. A second, independent task owns
 //! the `idle` connection and reports changes. The UI never awaits MPD.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use neo_ncmp_domain::{Library, MpdOutput, MpdStats, MpdStatus, Song};
-use neo_ncmp_mpd::{MpdClient, MpdError, Subsystem};
+use neo_ncmp_mpd::{MpdClient, MpdError, Picture, Playlist, Subsystem};
+
+use crate::lyrics::{self, LyricsDoc};
+use crate::stats::StatsReport;
+use crate::tags::TagUpdate;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -60,6 +65,11 @@ pub enum Command {
     Next,
     Previous,
     Seek(i64),
+    SeekTo(u64),
+    SetLoop {
+        repeat: bool,
+        single: bool,
+    },
     SetVolume(u8),
     SetOption(PlayerOption, bool),
     PlayPos(u32),
@@ -68,12 +78,53 @@ pub enum Command {
     AppendAndPlay(Vec<String>),
     ReplaceAndPlay(Vec<String>),
     RemoveId(u32),
-    MoveId { id: u32, to: u32 },
+    MoveId {
+        id: u32,
+        to: u32,
+    },
     Clear,
     Shuffle,
 
     EnableOutput(u32),
     DisableOutput(u32),
+
+    RefreshPlaylists,
+    RefreshPlaylistSongs(String),
+    LoadPlaylist {
+        name: String,
+        replace: bool,
+    },
+    AppendPlaylist(String),
+    SaveQueueAs(String),
+    DeletePlaylist(String),
+    RenamePlaylist {
+        from: String,
+        to: String,
+    },
+    PlaylistRemoveSong {
+        name: String,
+        position: u32,
+    },
+    PlaylistMoveSong {
+        name: String,
+        from: u32,
+        to: u32,
+    },
+
+    FetchCover(String),
+    SaveTags {
+        path: PathBuf,
+        uri: String,
+        update: TagUpdate,
+    },
+    FetchLyrics {
+        uri: String,
+        artist: String,
+        title: String,
+        album: String,
+        duration_seconds: Option<u64>,
+        music_directory: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug)]
@@ -95,6 +146,28 @@ pub enum Msg {
         generation: u64,
         results: Vec<usize>,
     },
+    Playlists(Vec<Playlist>),
+    PlaylistSongs {
+        name: String,
+        songs: Vec<Song>,
+    },
+    Cover {
+        uri: String,
+        picture: Option<Picture>,
+    },
+    Lyrics {
+        uri: String,
+        doc: Option<LyricsDoc>,
+    },
+    Visualizer(Vec<f32>),
+    VisualizerError(Option<String>),
+    TagsSaved {
+        uri: String,
+        backup: Option<PathBuf>,
+        error: Option<String>,
+    },
+    History(StatsReport),
+    HistoryError(String),
     Error(String),
 }
 
@@ -306,8 +379,21 @@ async fn execute(
             client.previous().await?;
             refresh_status_and_current(client, tx).await?;
         }
-        Seek(delta) => {
-            client.seek_current(&format!("{delta:+}")).await?;
+        Seek(delta_ms) => {
+            client
+                .seek_current(&format!("{:+.3}", delta_ms as f64 / 1000.0))
+                .await?;
+            refresh_status(client, tx).await?;
+        }
+        SeekTo(position_ms) => {
+            client
+                .seek_current(&format!("{:.3}", position_ms as f64 / 1000.0))
+                .await?;
+            refresh_status(client, tx).await?;
+        }
+        SetLoop { repeat, single } => {
+            client.set_repeat(repeat).await?;
+            client.set_single(single).await?;
             refresh_status(client, tx).await?;
         }
         SetVolume(volume) => {
@@ -381,6 +467,163 @@ async fn execute(
             client.disable_output(id).await?;
             let outputs = client.outputs().await?;
             send(tx, Msg::Outputs(outputs));
+        }
+
+        RefreshPlaylists => {
+            let playlists = client.playlists().await?;
+            send(tx, Msg::Playlists(playlists));
+        }
+        RefreshPlaylistSongs(name) => {
+            match client.playlist_info(&name).await {
+                Ok(songs) => send(tx, Msg::PlaylistSongs { name, songs }),
+                // The playlist was deleted while this request was in flight.
+                Err(MpdError::Ack { code: 50, .. }) => {
+                    send(
+                        tx,
+                        Msg::PlaylistSongs {
+                            name,
+                            songs: Vec::new(),
+                        },
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        LoadPlaylist { name, replace } => {
+            if replace {
+                client.clear().await?;
+            }
+            client.load_playlist(&name).await?;
+            if replace {
+                let _ = client.play().await;
+            }
+            refresh_queue(client, tx).await?;
+            refresh_status_and_current(client, tx).await?;
+        }
+        AppendPlaylist(name) => {
+            client.load_playlist(&name).await?;
+            refresh_queue(client, tx).await?;
+            refresh_status(client, tx).await?;
+        }
+        SaveQueueAs(name) => {
+            client.save_playlist(&name).await?;
+            let playlists = client.playlists().await?;
+            send(tx, Msg::Playlists(playlists));
+        }
+        DeletePlaylist(name) => {
+            client.remove_playlist(&name).await?;
+            let playlists = client.playlists().await?;
+            send(tx, Msg::Playlists(playlists));
+        }
+        RenamePlaylist { from, to } => {
+            client.rename_playlist(&from, &to).await?;
+            let playlists = client.playlists().await?;
+            send(tx, Msg::Playlists(playlists));
+        }
+        PlaylistRemoveSong { name, position } => {
+            client.playlist_delete(&name, position).await?;
+            let songs = client.playlist_info(&name).await?;
+            send(tx, Msg::PlaylistSongs { name, songs });
+        }
+        PlaylistMoveSong { name, from, to } => {
+            client.playlist_move(&name, from, to).await?;
+            let songs = client.playlist_info(&name).await?;
+            send(tx, Msg::PlaylistSongs { name, songs });
+        }
+
+        SaveTags { path, uri, update } => {
+            let endpoint = endpoint.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let result =
+                    tokio::task::spawn_blocking(move || crate::tags::save(&path, &update)).await;
+                match result {
+                    Ok(Ok(backup)) => {
+                        if let Ok(mut client) = connect(&endpoint).await {
+                            let _ = client.update(Some(&uri)).await;
+                        }
+                        send(
+                            &tx,
+                            Msg::TagsSaved {
+                                uri,
+                                backup: Some(backup),
+                                error: None,
+                            },
+                        );
+                    }
+                    Ok(Err(error)) => send(
+                        &tx,
+                        Msg::TagsSaved {
+                            uri,
+                            backup: None,
+                            error: Some(error),
+                        },
+                    ),
+                    Err(error) => send(
+                        &tx,
+                        Msg::TagsSaved {
+                            uri,
+                            backup: None,
+                            error: Some(error.to_string()),
+                        },
+                    ),
+                }
+            });
+        }
+
+        FetchLyrics {
+            uri,
+            artist,
+            title,
+            album,
+            duration_seconds,
+            music_directory,
+        } => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let doc = lyrics::fetch(lyrics::LyricsRequest {
+                    uri: &uri,
+                    artist: &artist,
+                    title: &title,
+                    album: &album,
+                    duration_seconds,
+                    music_directory: music_directory.as_deref(),
+                })
+                .await;
+                send(&tx, Msg::Lyrics { uri, doc });
+            });
+        }
+
+        FetchCover(uri) => {
+            // Artwork is fetched on its own connection so a slow read can
+            // never delay transport commands.
+            let endpoint = endpoint.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let mut client = match connect(&endpoint).await {
+                    Ok(client) => client,
+                    Err(error) => {
+                        tracing::debug!(%error, "cover connection failed");
+                        send(&tx, Msg::Cover { uri, picture: None });
+                        return;
+                    }
+                };
+                let picture = match client.read_picture(&uri).await {
+                    Ok(Some(picture)) => Some(picture),
+                    Ok(None) => match client.album_art(&uri).await {
+                        Ok(picture) => picture,
+                        Err(error) => {
+                            tracing::debug!(%error, "albumart failed");
+                            None
+                        }
+                    },
+                    Err(error) => {
+                        tracing::debug!(%error, "readpicture failed");
+                        None
+                    }
+                };
+                send(&tx, Msg::Cover { uri, picture });
+            });
         }
     }
     Ok(())

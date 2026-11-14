@@ -6,34 +6,66 @@ use futures::StreamExt;
 use neo_ncmp_domain::{
     Album, Artist, Library, MpdOutput, MpdStats, MpdStatus, PlaybackState, Song,
 };
-use neo_ncmp_mpd::Subsystem;
+use neo_ncmp_mpd::{Picture, Playlist, Subsystem};
 use ratatui::DefaultTerminal;
-use tokio::sync::mpsc;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
+use tokio::sync::{mpsc, watch};
 
 use crate::config::Config;
-use crate::input::{self, Action};
+use crate::input::{Action, Keymap};
+use crate::lyrics::LyricsDoc;
 use crate::mpd_worker::{self, Command, MpdHandle, Msg, PlayerOption};
+use crate::mpris::{self, MprisSnapshot};
+use crate::palette::PaletteState;
+use crate::scrobbler::{
+    self, ScrobbleEvent, ScrobbleHandle, ScrobbleKind, ScrobbleTrack, now_unix, scrobble_threshold,
+};
 use crate::search::{SearchHandle, SearchIndex, SearchState};
+use crate::session::SessionState;
+use crate::stats::{self, StatsReport};
+use crate::tags::TagUpdate;
 use crate::ui;
+use crate::visualizer;
 use crate::widgets::ListView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Queue,
     Library,
+    Playlists,
     Outputs,
     Stats,
+    Lyrics,
+    Visualizer,
+    TagEditor,
+    History,
 }
 
 impl Screen {
-    pub const ALL: [Self; 4] = [Self::Queue, Self::Library, Self::Outputs, Self::Stats];
+    pub const ALL: [Self; 9] = [
+        Self::Queue,
+        Self::Library,
+        Self::Playlists,
+        Self::Outputs,
+        Self::Stats,
+        Self::Lyrics,
+        Self::Visualizer,
+        Self::TagEditor,
+        Self::History,
+    ];
 
     pub fn index(self) -> usize {
         match self {
             Self::Queue => 0,
             Self::Library => 1,
-            Self::Outputs => 2,
-            Self::Stats => 3,
+            Self::Playlists => 2,
+            Self::Outputs => 3,
+            Self::Stats => 4,
+            Self::Lyrics => 5,
+            Self::Visualizer => 6,
+            Self::TagEditor => 7,
+            Self::History => 8,
         }
     }
 
@@ -41,8 +73,27 @@ impl Screen {
         match self {
             Self::Queue => "Queue",
             Self::Library => "Library",
+            Self::Playlists => "Playlists",
             Self::Outputs => "Outputs",
             Self::Stats => "Stats",
+            Self::Lyrics => "Lyrics",
+            Self::Visualizer => "Visualizer",
+            Self::TagEditor => "Tags",
+            Self::History => "History",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Queue => "queue",
+            Self::Library => "library",
+            Self::Playlists => "playlists",
+            Self::Outputs => "outputs",
+            Self::Stats => "stats",
+            Self::Lyrics => "lyrics",
+            Self::Visualizer => "visualizer",
+            Self::TagEditor => "tags",
+            Self::History => "history",
         }
     }
 
@@ -57,8 +108,13 @@ impl Screen {
     pub fn from_name(name: &str) -> Self {
         match name.to_ascii_lowercase().as_str() {
             "library" => Self::Library,
+            "playlists" => Self::Playlists,
             "outputs" => Self::Outputs,
             "stats" => Self::Stats,
+            "lyrics" => Self::Lyrics,
+            "visualizer" => Self::Visualizer,
+            "tags" | "tag-editor" | "tag editor" => Self::TagEditor,
+            "history" => Self::History,
             _ => Self::Queue,
         }
     }
@@ -78,6 +134,172 @@ pub struct LibraryView {
     pub artists: ListView,
     pub albums: ListView,
     pub songs: ListView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlaylistPane {
+    #[default]
+    Playlists,
+    Songs,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputModal {
+    pub prompt: String,
+    pub value: String,
+    pub action: InputAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagKey {
+    Title,
+    Artist,
+    Album,
+    AlbumArtist,
+    Date,
+    Genre,
+    Track,
+    Disc,
+    Comment,
+}
+
+impl TagKey {
+    pub const ALL: [Self; 9] = [
+        Self::Title,
+        Self::Artist,
+        Self::Album,
+        Self::AlbumArtist,
+        Self::Date,
+        Self::Genre,
+        Self::Track,
+        Self::Disc,
+        Self::Comment,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Title => "Title",
+            Self::Artist => "Artist",
+            Self::Album => "Album",
+            Self::AlbumArtist => "Album Artist",
+            Self::Date => "Date",
+            Self::Genre => "Genre",
+            Self::Track => "Track",
+            Self::Disc => "Disc",
+            Self::Comment => "Comment",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TagField {
+    pub key: TagKey,
+    pub value: String,
+}
+
+#[derive(Debug, Default)]
+pub struct TagEditorState {
+    pub uri: Option<Arc<str>>,
+    pub fields: Vec<TagField>,
+    pub cursor: usize,
+    pub dirty: bool,
+    pub message: Option<(String, bool)>,
+}
+
+impl TagEditorState {
+    pub fn from_song(song: &Song) -> Self {
+        let mut fields = Vec::with_capacity(TagKey::ALL.len());
+        for key in TagKey::ALL {
+            let value = match key {
+                TagKey::Title => song.title.as_deref().unwrap_or_default().to_string(),
+                TagKey::Artist => song.artist.as_deref().unwrap_or_default().to_string(),
+                TagKey::Album => song.album.as_deref().unwrap_or_default().to_string(),
+                TagKey::AlbumArtist => song.album_artist.as_deref().unwrap_or_default().to_string(),
+                TagKey::Date => song.date.as_deref().unwrap_or_default().to_string(),
+                TagKey::Genre => song.genre.as_deref().unwrap_or_default().to_string(),
+                TagKey::Track => song
+                    .track
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                TagKey::Disc => song.disc.map(|value| value.to_string()).unwrap_or_default(),
+                TagKey::Comment => song
+                    .tags
+                    .iter()
+                    .find(|(key, _)| key.as_ref() == "Comment")
+                    .map(|(_, value)| value.to_string())
+                    .unwrap_or_default(),
+            };
+            fields.push(TagField { key, value });
+        }
+        Self {
+            uri: Some(song.uri.clone()),
+            fields,
+            cursor: 0,
+            dirty: false,
+            message: None,
+        }
+    }
+
+    pub fn value(&self, key: TagKey) -> String {
+        self.fields
+            .iter()
+            .find(|field| field.key == key)
+            .map(|field| field.value.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    fn number(&self, key: TagKey) -> Result<Option<u32>, String> {
+        let value = self.value(key);
+        if value.is_empty() {
+            Ok(None)
+        } else {
+            value
+                .parse()
+                .map(Some)
+                .map_err(|_| format!("{} must be a number", key.label()))
+        }
+    }
+
+    pub fn to_update(&self) -> Result<TagUpdate, String> {
+        Ok(TagUpdate {
+            title: self.value(TagKey::Title),
+            artist: self.value(TagKey::Artist),
+            album: self.value(TagKey::Album),
+            album_artist: self.value(TagKey::AlbumArtist),
+            date: self.value(TagKey::Date),
+            genre: self.value(TagKey::Genre),
+            comment: self.value(TagKey::Comment),
+            track: self.number(TagKey::Track)?,
+            disc: self.number(TagKey::Disc)?,
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct LyricsView {
+    pub doc: Option<LyricsDoc>,
+    pub uri: Option<Arc<str>>,
+    pub loading: bool,
+    /// Positive shifts lyrics later; negative earlier.
+    pub offset_ms: i64,
+    pub scroll: usize,
+}
+
+impl LyricsView {
+    pub fn adjusted_position(&self, position: Duration) -> Duration {
+        if self.offset_ms >= 0 {
+            position + Duration::from_millis(self.offset_ms as u64)
+        } else {
+            position.saturating_sub(Duration::from_millis((-self.offset_ms) as u64))
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum InputAction {
+    SaveQueueAsPlaylist,
+    RenamePlaylist { from: String },
+    EditTagField { index: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -113,9 +335,38 @@ pub struct Confirm {
     pub action: ConfirmAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmAction {
     ClearQueue,
+    DeletePlaylist(String),
+    SaveTags,
+}
+
+#[derive(Debug, Clone)]
+struct PlaybackScrobble {
+    uri: Arc<str>,
+    track: ScrobbleTrack,
+    duration: Option<Duration>,
+    elapsed: Duration,
+    submitted: bool,
+    recorded: bool,
+    now_playing_sent: bool,
+    timestamp: u64,
+}
+
+impl PlaybackScrobble {
+    fn new(song: &Song) -> Self {
+        Self {
+            uri: song.uri.clone(),
+            track: ScrobbleTrack::from_song(song),
+            duration: song.duration,
+            elapsed: Duration::ZERO,
+            submitted: false,
+            recorded: false,
+            now_playing_sent: false,
+            timestamp: now_unix(),
+        }
+    }
 }
 
 pub struct App {
@@ -135,15 +386,49 @@ pub struct App {
     pub outputs_view: ListView,
     pub stats: Option<MpdStats>,
 
+    pub playlists: Vec<Playlist>,
+    pub playlists_view: ListView,
+    pub playlist_pane: PlaylistPane,
+    pub playlist_songs: Vec<Song>,
+    pub playlist_songs_view: ListView,
+    loaded_playlist: Option<String>,
+
     pub search: SearchState,
     pub search_index: Option<Arc<SearchIndex>>,
     search_handle: SearchHandle,
     search_generation: u64,
 
+    pub lyrics: LyricsView,
+    lyrics_cache: std::collections::HashMap<Arc<str>, LyricsDoc>,
+
+    pub spectrum: Vec<f32>,
+    pub visualizer_error: Option<String>,
+
+    pub tag_editor: TagEditorState,
+    pub palette: PaletteState,
+    keymap: Keymap,
+
+    pub history: Option<StatsReport>,
+    pub history_loading: bool,
+    pub history_error: Option<String>,
+    pub history_cursor: usize,
+
+    scrobbler: Option<ScrobbleHandle>,
+    scrobble: Option<PlaybackScrobble>,
+    event_tx: mpsc::UnboundedSender<Msg>,
+
+    mpris_tx: watch::Sender<MprisSnapshot>,
+
+    pub cover_protocol: Option<StatefulProtocol>,
+    picker: Picker,
+    cover_requested: Option<Arc<str>>,
+    cover_cache: std::collections::HashMap<Arc<str>, Option<Arc<Picture>>>,
+
     pub connection: ConnectionState,
     pub version: Option<String>,
     pub help: bool,
     pub confirm: Option<Confirm>,
+    pub input: Option<InputModal>,
     pub toast: Option<Toast>,
     pub should_quit: bool,
 
@@ -154,7 +439,16 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, mpd: MpdHandle, search_handle: SearchHandle) -> Self {
+    pub fn new(
+        config: Config,
+        mpd: MpdHandle,
+        search_handle: SearchHandle,
+        picker: Picker,
+        mpris_tx: watch::Sender<MprisSnapshot>,
+        scrobbler: Option<ScrobbleHandle>,
+        event_tx: mpsc::UnboundedSender<Msg>,
+    ) -> Self {
+        let keymap = Keymap::from_config(&config.keys);
         Self {
             screen: Screen::from_name(&config.ui.start_screen),
             config,
@@ -168,14 +462,40 @@ impl App {
             outputs: Vec::new(),
             outputs_view: ListView::default(),
             stats: None,
+            playlists: Vec::new(),
+            playlists_view: ListView::default(),
+            playlist_pane: PlaylistPane::default(),
+            playlist_songs: Vec::new(),
+            playlist_songs_view: ListView::default(),
+            loaded_playlist: None,
             search: SearchState::default(),
             search_index: None,
             search_handle,
             search_generation: 0,
+            lyrics: LyricsView::default(),
+            lyrics_cache: std::collections::HashMap::new(),
+            spectrum: Vec::new(),
+            visualizer_error: None,
+            tag_editor: TagEditorState::default(),
+            palette: PaletteState::default(),
+            keymap,
+            history: None,
+            history_loading: false,
+            history_error: None,
+            history_cursor: 0,
+            scrobbler,
+            scrobble: None,
+            event_tx,
+            mpris_tx,
+            cover_protocol: None,
+            picker,
+            cover_requested: None,
+            cover_cache: std::collections::HashMap::new(),
             connection: ConnectionState::Connecting,
             version: None,
             help: false,
             confirm: None,
+            input: None,
             toast: None,
             should_quit: false,
             elapsed_at_sync: Duration::ZERO,
@@ -191,8 +511,43 @@ impl App {
         let mpd = mpd_worker::spawn(endpoint.clone(), tx.clone());
         mpd_worker::spawn_idle(endpoint, tx.clone());
         let search_handle = SearchHandle::spawn(tx.clone());
+        if config.visualizer.enabled {
+            visualizer::spawn(
+                config.visualizer.fifo.clone(),
+                visualizer::AudioSpec {
+                    sample_rate: config.visualizer.sample_rate,
+                    channels: config.visualizer.channels,
+                    bits: config.visualizer.bits,
+                },
+                config.visualizer.bars,
+                tx.clone(),
+            );
+        }
+        let (mpris_tx, mpris_rx) = watch::channel(MprisSnapshot::default());
+        mpris::spawn(mpd.clone(), mpris_rx);
+        let scrobbler = if config.scrobbling.enabled {
+            Some(scrobbler::spawn(config.scrobbling.clone()))
+        } else {
+            None
+        };
 
-        let mut app = App::new(config.clone(), mpd, search_handle);
+        // Must run before EventStream starts consuming stdin.
+        let picker = Picker::from_query_stdio().unwrap_or_else(|error| {
+            tracing::warn!(%error, "terminal image detection failed; using halfblocks");
+            Picker::halfblocks()
+        });
+
+        ui::apply_theme(&config.theme);
+        let mut app = App::new(
+            config.clone(),
+            mpd,
+            search_handle,
+            picker,
+            mpris_tx,
+            scrobbler,
+            tx.clone(),
+        );
+        app.restore_session();
         let mut events = EventStream::new();
         let tick_rate = Duration::from_millis(config.ui.tick_rate_ms.max(50));
         let mut ticker = tokio::time::interval(tick_rate);
@@ -237,7 +592,68 @@ impl App {
                 break;
             }
         }
+        app.save_session();
         Ok(())
+    }
+
+    pub fn restore_session(&mut self) {
+        if !self.config.ui.restore_session {
+            return;
+        }
+        let session = SessionState::load();
+        if let Some(name) = session.screen.as_deref() {
+            self.screen = Screen::from_name(name);
+        }
+        self.queue_view.cursor = session.queue_cursor;
+        self.library_view.pane = match session.library_pane {
+            1 => LibraryPane::Albums,
+            2 => LibraryPane::Songs,
+            _ => LibraryPane::Artists,
+        };
+        self.library_view.artists.cursor = session.library_artist;
+        self.library_view.albums.cursor = session.library_album;
+        self.library_view.songs.cursor = session.library_song;
+        self.playlists_view.cursor = session.playlist_cursor;
+        self.playlist_pane = if session.playlist_pane == 1 {
+            PlaylistPane::Songs
+        } else {
+            PlaylistPane::Playlists
+        };
+        self.history_cursor = session.history_cursor;
+        self.lyrics.offset_ms = session.lyrics_offset_ms.clamp(-10_000, 10_000);
+        match self.screen {
+            Screen::History => self.load_history(),
+            Screen::Lyrics => self.request_lyrics(false),
+            Screen::TagEditor => self.load_tag_editor(),
+            _ => {}
+        }
+    }
+
+    fn save_session(&self) {
+        if !self.config.ui.restore_session {
+            return;
+        }
+        let session = SessionState {
+            screen: Some(self.screen.name().to_string()),
+            queue_cursor: self.queue_view.cursor,
+            library_pane: match self.library_view.pane {
+                LibraryPane::Artists => 0,
+                LibraryPane::Albums => 1,
+                LibraryPane::Songs => 2,
+            },
+            library_artist: self.library_view.artists.cursor,
+            library_album: self.library_view.albums.cursor,
+            library_song: self.library_view.songs.cursor,
+            playlist_cursor: self.playlists_view.cursor,
+            playlist_pane: if self.playlist_pane == PlaylistPane::Songs {
+                1
+            } else {
+                0
+            },
+            history_cursor: self.history_cursor,
+            lyrics_offset_ms: self.lyrics.offset_ms,
+        };
+        session.save();
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -258,6 +674,11 @@ impl App {
             return;
         }
 
+        if self.input.is_some() {
+            self.handle_input_key(key);
+            return;
+        }
+
         if self.help {
             self.help = false;
             return;
@@ -268,7 +689,12 @@ impl App {
             return;
         }
 
-        if let Some(action) = input::action_for(key, self.screen) {
+        if self.palette.active {
+            self.handle_palette_key(key);
+            return;
+        }
+
+        if let Some(action) = self.keymap.action_for(key, self.screen) {
             self.handle_action(action);
         }
     }
@@ -278,6 +704,7 @@ impl App {
             Msg::Connected { version } => {
                 self.connection = ConnectionState::Connected(version.clone());
                 self.version = Some(version);
+                self.mpd.send(Command::RefreshPlaylists);
                 self.toast_success("Connected to MPD");
             }
             Msg::Disconnected { error } => {
@@ -294,11 +721,67 @@ impl App {
                         self.queue_view.cursor = position as usize;
                     }
                 }
+                if let Some(track) = &mut self.scrobble {
+                    if let Some(duration) = status.duration {
+                        track.duration = Some(duration);
+                    }
+                    let current_id = self.current.as_ref().and_then(|song| song.id);
+                    if status.song_id.is_none() || status.song_id == current_id {
+                        track.elapsed = track.elapsed.max(status.elapsed);
+                    }
+                }
+                if status.state.is_playing() {
+                    self.send_now_playing();
+                }
+                self.maybe_submit_scrobble();
                 self.elapsed_at_sync = status.elapsed;
                 self.elapsed_synced_at = Instant::now();
                 self.status = Some(status);
+                self.publish_mpris();
             }
-            Msg::CurrentSong(song) => self.current = song,
+            Msg::CurrentSong(song) => {
+                let previous_existed = self.current.is_some();
+                let changed = self
+                    .current
+                    .as_ref()
+                    .map(|current| (&current.uri, current.id))
+                    != song.as_ref().map(|song| (&song.uri, song.id));
+                if changed {
+                    if let Some(previous) = self.scrobble.take() {
+                        self.submit_finished_scrobble(previous);
+                    }
+                    self.current = song;
+                    if let Some(song) = &self.current {
+                        self.scrobble = Some(PlaybackScrobble::new(song));
+                    } else {
+                        self.scrobble = None;
+                    }
+                    if previous_existed
+                        && self.config.ui.notifications
+                        && let Some(song) = &self.current
+                    {
+                        crate::notifications::track_changed(song);
+                    }
+                } else {
+                    // Reconnect or metadata refresh for the same track.
+                    self.current = song;
+                }
+                if self
+                    .status
+                    .as_ref()
+                    .is_some_and(|status| status.state.is_playing())
+                {
+                    self.send_now_playing();
+                }
+                self.request_cover();
+                if self.screen == Screen::Lyrics {
+                    self.request_lyrics(false);
+                }
+                if self.screen == Screen::TagEditor {
+                    self.load_tag_editor();
+                }
+                self.publish_mpris();
+            }
             Msg::Queue(queue) => {
                 self.queue = queue;
                 self.queue_view.clamp(self.queue.len());
@@ -323,6 +806,80 @@ impl App {
                 self.outputs_view.clamp(self.outputs.len());
             }
             Msg::Stats(stats) => self.stats = Some(stats),
+            Msg::Playlists(mut playlists) => {
+                playlists.sort_by_key(|playlist| playlist.name.to_lowercase());
+                self.playlists = playlists;
+                self.playlists_view.clamp(self.playlists.len());
+                self.ensure_playlist_songs();
+            }
+            Msg::PlaylistSongs { name, songs } => {
+                if self.selected_playlist_name().as_deref() == Some(name.as_str()) {
+                    self.playlist_songs = songs;
+                    self.playlist_songs_view.clamp(self.playlist_songs.len());
+                    self.loaded_playlist = Some(name);
+                }
+            }
+            Msg::Cover { uri, picture } => {
+                let uri: Arc<str> = Arc::from(uri.as_str());
+                let picture = picture.map(Arc::new);
+                if self.cover_cache.len() >= 64 {
+                    self.cover_cache.clear();
+                }
+                self.cover_cache.insert(uri.clone(), picture.clone());
+                if self.current.as_ref().is_some_and(|song| song.uri == uri) {
+                    self.set_cover(picture);
+                }
+            }
+            Msg::Visualizer(bars) => {
+                self.spectrum = bars;
+                self.visualizer_error = None;
+            }
+            Msg::VisualizerError(error) => {
+                self.visualizer_error = error;
+                if self.visualizer_error.is_some() {
+                    self.spectrum.clear();
+                }
+            }
+            Msg::History(report) => {
+                self.history_cursor = self
+                    .history_cursor
+                    .min(report.top_songs.len().saturating_sub(1));
+                self.history = Some(report);
+                self.history_loading = false;
+                self.history_error = None;
+            }
+            Msg::HistoryError(error) => {
+                self.history_loading = false;
+                self.history_error = Some(error);
+            }
+            Msg::TagsSaved { uri, backup, error } => {
+                if let Some(error) = error {
+                    self.tag_editor.message = Some((error.clone(), true));
+                    self.toast_error(error);
+                } else {
+                    let message = match &backup {
+                        Some(path) => format!("Saved · backup {}", path.display()),
+                        None => "Saved".to_string(),
+                    };
+                    tracing::info!(%uri, ?backup, "tags saved");
+                    self.tag_editor.message = Some((message, false));
+                    self.tag_editor.dirty = false;
+                    self.toast_success("Tags saved");
+                    self.mpd.send(Command::RefreshCurrent);
+                    self.mpd.send(Command::RefreshQueue);
+                    self.library_reload_at = Some(Instant::now() + Duration::from_millis(700));
+                }
+            }
+            Msg::Lyrics { uri, doc } => {
+                let uri: Arc<str> = Arc::from(uri.as_str());
+                if self.lyrics.uri.as_deref() == Some(uri.as_ref()) {
+                    self.lyrics.loading = false;
+                    if let Some(document) = &doc {
+                        self.lyrics_cache.insert(uri, document.clone());
+                    }
+                    self.lyrics.doc = doc;
+                }
+            }
             Msg::SearchResults {
                 generation,
                 results,
@@ -384,6 +941,12 @@ impl App {
                     refresh_status = true;
                 }
                 Subsystem::Output => self.mpd.send(Command::RefreshOutputs),
+                Subsystem::StoredPlaylist => {
+                    self.mpd.send(Command::RefreshPlaylists);
+                    if let Some(name) = self.selected_playlist_name() {
+                        self.mpd.send(Command::RefreshPlaylistSongs(name));
+                    }
+                }
                 Subsystem::Database | Subsystem::Update => {
                     // A database update emits many idle events; coalesce them.
                     self.library_reload_at = Some(Instant::now() + Duration::from_millis(400));
@@ -409,6 +972,7 @@ impl App {
             Action::Quit => self.should_quit = true,
             Action::ToggleHelp => self.help = !self.help,
             Action::OpenSearch => self.open_search(),
+            Action::OpenPalette => self.palette.open(),
             Action::NextScreen => self.set_screen(self.screen.next()),
             Action::PreviousScreen => self.set_screen(self.screen.previous()),
             Action::GotoScreen(index) => {
@@ -417,8 +981,12 @@ impl App {
                 }
             }
             Action::Refresh => {
-                self.mpd.send(Command::RefreshAll);
-                self.toast_info("Refreshing…");
+                if self.screen == Screen::History {
+                    self.load_history();
+                } else {
+                    self.mpd.send(Command::RefreshAll);
+                    self.toast_info("Refreshing…");
+                }
             }
             Action::MoveDown => self.move_selection(1),
             Action::MoveUp => self.move_selection(-1),
@@ -432,8 +1000,8 @@ impl App {
             Action::PreviousTrack => self.mpd.send(Command::Previous),
             Action::VolumeUp => self.change_volume(5),
             Action::VolumeDown => self.change_volume(-5),
-            Action::SeekForward => self.mpd.send(Command::Seek(5)),
-            Action::SeekBackward => self.mpd.send(Command::Seek(-5)),
+            Action::SeekForward => self.mpd.send(Command::Seek(5_000)),
+            Action::SeekBackward => self.mpd.send(Command::Seek(-5_000)),
             Action::ToggleRepeat => self.toggle_option(PlayerOption::Repeat),
             Action::ToggleRandom => self.toggle_option(PlayerOption::Random),
             Action::ToggleSingle => self.toggle_option(PlayerOption::Single),
@@ -442,8 +1010,8 @@ impl App {
             Action::EnqueueSelected => self.enqueue_selected(),
             Action::ReplaceAndPlay => self.replace_and_play(),
             Action::RemoveSelected => self.remove_selected(),
-            Action::MoveSelectionDown => self.move_queue_selection(1),
-            Action::MoveSelectionUp => self.move_queue_selection(-1),
+            Action::MoveSelectionDown => self.move_selected_item(1),
+            Action::MoveSelectionUp => self.move_selected_item(-1),
             Action::ClearQueue => self.request_clear_queue(),
             Action::ShuffleQueue => {
                 self.mpd.send(Command::Shuffle);
@@ -452,6 +1020,304 @@ impl App {
             Action::PaneLeft => self.change_pane(-1),
             Action::PaneRight => self.change_pane(1),
             Action::ToggleOutput => self.toggle_output(),
+            Action::ReloadLyrics => self.request_lyrics(true),
+            Action::LyricsEarlier => self.adjust_lyrics_offset(-500),
+            Action::LyricsLater => self.adjust_lyrics_offset(500),
+            Action::EditTag => self.open_tag_input(),
+            Action::SaveTags => self.request_save_tags(),
+            Action::SavePlaylist => self.open_save_playlist(),
+            Action::RenamePlaylist => self.open_rename_playlist(),
+            Action::DeletePlaylist => self.request_delete_playlist(),
+        }
+    }
+
+    fn publish_mpris(&self) {
+        let snapshot = MprisSnapshot {
+            playback: self
+                .status
+                .as_ref()
+                .map_or(PlaybackState::Stopped, |status| status.state),
+            volume: self.status.as_ref().and_then(|status| status.volume),
+            current: self.current.clone(),
+            position: self.effective_elapsed(),
+            repeat: self.status.as_ref().is_some_and(|status| status.repeat),
+            random: self.status.as_ref().is_some_and(|status| status.random),
+            single: self.status.as_ref().is_some_and(|status| status.single),
+        };
+        let _ = self.mpris_tx.send(snapshot);
+    }
+
+    fn load_history(&mut self) {
+        self.history_loading = true;
+        self.history_error = None;
+        let tx = self.event_tx.clone();
+        std::thread::spawn(move || match stats::load_report() {
+            Ok(report) => {
+                let _ = tx.send(Msg::History(report));
+            }
+            Err(error) => {
+                let _ = tx.send(Msg::HistoryError(error));
+            }
+        });
+    }
+
+    fn record_play(&self, track: &PlaybackScrobble) {
+        if !self.config.stats.enabled {
+            return;
+        }
+        let completed = track
+            .duration
+            .is_some_and(|duration| track.elapsed + Duration::from_secs(5) >= duration);
+        stats::spawn_record(
+            track.uri.to_string(),
+            track.track.artist.clone(),
+            track.track.title.clone(),
+            track.track.album.clone(),
+            track.timestamp,
+            track.elapsed.as_secs(),
+            completed,
+        );
+    }
+
+    fn send_now_playing(&mut self) {
+        let Some(track) = &mut self.scrobble else {
+            return;
+        };
+        if track.now_playing_sent {
+            return;
+        }
+        track.now_playing_sent = true;
+        let event = ScrobbleEvent {
+            kind: ScrobbleKind::NowPlaying,
+            track: track.track.clone(),
+            timestamp: now_unix(),
+        };
+        if let Some(scrobbler) = &self.scrobbler {
+            scrobbler.send(event);
+        }
+    }
+
+    fn maybe_submit_scrobble(&mut self) {
+        let Some(track) = &self.scrobble else {
+            return;
+        };
+        if track.elapsed < scrobble_threshold(track.duration) {
+            return;
+        }
+        let should_record = !track.recorded;
+        let should_submit = !track.submitted;
+        let event = should_submit.then(|| ScrobbleEvent {
+            kind: ScrobbleKind::Single,
+            track: track.track.clone(),
+            timestamp: track.timestamp,
+        });
+        if should_record {
+            self.record_play(track);
+        }
+        if should_record && let Some(track) = &mut self.scrobble {
+            track.recorded = true;
+        }
+        if let Some(event) = event {
+            if let Some(scrobbler) = &self.scrobbler {
+                scrobbler.send(event);
+            }
+            if let Some(track) = &mut self.scrobble {
+                track.submitted = true;
+            }
+        }
+    }
+
+    fn submit_finished_scrobble(&self, track: PlaybackScrobble) {
+        if track.elapsed < scrobble_threshold(track.duration) {
+            return;
+        }
+        if !track.recorded {
+            self.record_play(&track);
+        }
+        if track.submitted {
+            return;
+        }
+        if let Some(scrobbler) = &self.scrobbler {
+            scrobbler.send(ScrobbleEvent {
+                kind: ScrobbleKind::Single,
+                track: track.track,
+                timestamp: track.timestamp,
+            });
+        }
+    }
+
+    fn load_tag_editor(&mut self) {
+        let Some(song) = &self.current else {
+            self.tag_editor = TagEditorState::default();
+            return;
+        };
+        if self.tag_editor.uri.as_deref() == Some(song.uri.as_ref())
+            && !self.tag_editor.fields.is_empty()
+        {
+            return;
+        }
+        self.tag_editor = TagEditorState::from_song(song);
+    }
+
+    fn open_tag_input(&mut self) {
+        let Some(field) = self.tag_editor.fields.get(self.tag_editor.cursor) else {
+            return;
+        };
+        self.input = Some(InputModal {
+            prompt: format!("Edit {}", field.key.label()),
+            value: field.value.clone(),
+            action: InputAction::EditTagField {
+                index: self.tag_editor.cursor,
+            },
+        });
+    }
+
+    fn request_save_tags(&mut self) {
+        if !self.tag_editor.dirty {
+            self.toast_info("No tag changes");
+            return;
+        }
+        if self.config.library.music_directory.is_none() {
+            self.toast_error("Set [library] music_directory to edit tags");
+            return;
+        }
+        self.confirm = Some(Confirm {
+            message: "Write tags to disk? A backup will be created.".into(),
+            action: ConfirmAction::SaveTags,
+        });
+    }
+
+    fn save_tags(&mut self) {
+        let Some(directory) = self.config.library.music_directory.clone() else {
+            self.toast_error("Set [library] music_directory to edit tags");
+            return;
+        };
+        let Some(uri) = self.tag_editor.uri.clone() else {
+            return;
+        };
+        if uri.contains("://") || uri.starts_with('/') || uri.split('/').any(|part| part == "..") {
+            self.toast_error("This track cannot be edited");
+            return;
+        }
+        let update = match self.tag_editor.to_update() {
+            Ok(update) => update,
+            Err(error) => {
+                self.toast_error(error);
+                return;
+            }
+        };
+        let path = directory.join(uri.as_ref());
+        self.tag_editor.message = Some(("Writing tags…".into(), false));
+        self.mpd.send(Command::SaveTags {
+            path,
+            uri: uri.to_string(),
+            update,
+        });
+    }
+
+    fn request_lyrics(&mut self, force: bool) {
+        let Some(song) = self.current.as_ref() else {
+            self.lyrics = LyricsView::default();
+            return;
+        };
+        let uri = song.uri.clone();
+        if !force && let Some(cached) = self.lyrics_cache.get(uri.as_ref()) {
+            self.lyrics.doc = Some(cached.clone());
+            self.lyrics.uri = Some(uri);
+            self.lyrics.loading = false;
+            return;
+        }
+        self.lyrics.uri = Some(uri.clone());
+        self.lyrics.doc = None;
+        self.lyrics.loading = true;
+        self.lyrics.scroll = 0;
+        self.mpd.send(Command::FetchLyrics {
+            uri: uri.to_string(),
+            artist: song.display_artist().to_owned(),
+            title: song.display_title().to_owned(),
+            album: song.display_album().to_owned(),
+            duration_seconds: song.duration.map(|duration| duration.as_secs()),
+            music_directory: self.config.library.music_directory.clone(),
+        });
+    }
+
+    fn adjust_lyrics_offset(&mut self, delta_ms: i64) {
+        self.lyrics.offset_ms = (self.lyrics.offset_ms + delta_ms).clamp(-10_000, 10_000);
+    }
+
+    fn scroll_lyrics(&mut self, delta: isize) {
+        let Some(doc) = &self.lyrics.doc else {
+            return;
+        };
+        if !doc.synced.is_empty() {
+            return;
+        }
+        let lines = doc.plain.as_deref().map_or(0, |text| text.lines().count());
+        self.lyrics.scroll = self
+            .lyrics
+            .scroll
+            .saturating_add_signed(delta)
+            .min(lines.saturating_sub(1));
+    }
+
+    fn request_cover(&mut self) {
+        let Some(uri) = self.current.as_ref().map(|song| song.uri.clone()) else {
+            self.cover_protocol = None;
+            self.cover_requested = None;
+            return;
+        };
+        if self.cover_requested.as_deref() == Some(uri.as_ref()) {
+            return;
+        }
+        self.cover_requested = Some(uri.clone());
+        if let Some(cached) = self.cover_cache.get(uri.as_ref()) {
+            let cached = cached.clone();
+            self.set_cover(cached);
+            return;
+        }
+        self.mpd.send(Command::FetchCover(uri.to_string()));
+    }
+
+    fn set_cover(&mut self, picture: Option<Arc<Picture>>) {
+        self.cover_protocol = None;
+        let Some(picture) = picture else {
+            return;
+        };
+        match image::load_from_memory(&picture.data) {
+            Ok(image) => {
+                self.cover_protocol = Some(self.picker.new_resize_protocol(image));
+            }
+            Err(error) => tracing::warn!(%error, "could not decode cover art"),
+        }
+    }
+
+    fn handle_palette_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => self.palette.close(),
+            KeyCode::Enter => {
+                if let Some(item) = self.palette.selected() {
+                    self.palette.close();
+                    self.handle_action(item.action);
+                }
+            }
+            KeyCode::Up => self.palette.move_cursor(-1),
+            KeyCode::Down => self.palette.move_cursor(1),
+            KeyCode::PageUp => self.palette.move_cursor(-10),
+            KeyCode::PageDown => self.palette.move_cursor(10),
+            KeyCode::Backspace => {
+                self.palette.query.pop();
+                self.palette.refresh();
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.palette.query.clear();
+                self.palette.refresh();
+            }
+            KeyCode::Char(character) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.palette.query.push(character);
+                self.palette.refresh();
+            }
+            _ => {}
         }
     }
 
@@ -543,6 +1409,13 @@ impl App {
         }
         self.screen = screen;
         match screen {
+            Screen::Playlists => {
+                self.mpd.send(Command::RefreshPlaylists);
+                self.ensure_playlist_songs();
+            }
+            Screen::Lyrics => self.request_lyrics(false),
+            Screen::TagEditor => self.load_tag_editor(),
+            Screen::History => self.load_history(),
             Screen::Outputs => self.mpd.send(Command::RefreshOutputs),
             Screen::Stats => self.mpd.send(Command::RefreshStats),
             _ => {}
@@ -553,8 +1426,28 @@ impl App {
         match self.screen {
             Screen::Queue => self.queue_view.move_by(delta, self.queue.len()),
             Screen::Library => self.move_library(delta),
+            Screen::Playlists => self.move_playlist_selection(delta),
             Screen::Outputs => self.outputs_view.move_by(delta, self.outputs.len()),
-            Screen::Stats => {}
+            Screen::Lyrics => self.scroll_lyrics(delta),
+            Screen::Stats | Screen::Visualizer => {}
+            Screen::History => {
+                let len = self
+                    .history
+                    .as_ref()
+                    .map_or(0, |report| report.top_songs.len());
+                self.history_cursor = self
+                    .history_cursor
+                    .saturating_add_signed(delta)
+                    .min(len.saturating_sub(1));
+            }
+            Screen::TagEditor => {
+                let len = self.tag_editor.fields.len();
+                self.tag_editor.cursor = self
+                    .tag_editor
+                    .cursor
+                    .saturating_add_signed(delta)
+                    .min(len.saturating_sub(1));
+            }
         }
     }
 
@@ -563,8 +1456,32 @@ impl App {
         match self.screen {
             Screen::Queue => self.queue_view.page(direction, self.queue.len(), PAGE),
             Screen::Library => self.move_library(direction.saturating_mul(PAGE as isize)),
+            Screen::Playlists => {
+                self.move_playlist_selection(direction.saturating_mul(PAGE as isize))
+            }
             Screen::Outputs => self.outputs_view.page(direction, self.outputs.len(), PAGE),
-            Screen::Stats => {}
+            Screen::Lyrics => {
+                self.scroll_lyrics(direction.saturating_mul(PAGE as isize));
+            }
+            Screen::Stats | Screen::Visualizer => {}
+            Screen::History => {
+                let len = self
+                    .history
+                    .as_ref()
+                    .map_or(0, |report| report.top_songs.len());
+                self.history_cursor = self
+                    .history_cursor
+                    .saturating_add_signed(direction.saturating_mul(PAGE as isize))
+                    .min(len.saturating_sub(1));
+            }
+            Screen::TagEditor => {
+                let len = self.tag_editor.fields.len();
+                self.tag_editor.cursor = self
+                    .tag_editor
+                    .cursor
+                    .saturating_add_signed(direction.saturating_mul(PAGE as isize))
+                    .min(len.saturating_sub(1));
+            }
         }
     }
 
@@ -603,6 +1520,23 @@ impl App {
                     }
                 }
             },
+            Screen::Playlists => match self.playlist_pane {
+                PlaylistPane::Playlists => {
+                    if last {
+                        self.playlists_view.last(self.playlists.len());
+                    } else {
+                        self.playlists_view.first();
+                    }
+                    self.ensure_playlist_songs();
+                }
+                PlaylistPane::Songs => {
+                    if last {
+                        self.playlist_songs_view.last(self.playlist_songs.len());
+                    } else {
+                        self.playlist_songs_view.first();
+                    }
+                }
+            },
             Screen::Outputs => {
                 if last {
                     self.outputs_view.last(self.outputs.len());
@@ -610,7 +1544,34 @@ impl App {
                     self.outputs_view.first();
                 }
             }
-            Screen::Stats => {}
+            Screen::Lyrics => {
+                if last {
+                    let lines = self
+                        .lyrics
+                        .doc
+                        .as_ref()
+                        .and_then(|doc| doc.plain.as_deref())
+                        .map_or(0, |text| text.lines().count());
+                    self.lyrics.scroll = lines.saturating_sub(1);
+                } else {
+                    self.lyrics.scroll = 0;
+                }
+            }
+            Screen::Stats | Screen::Visualizer => {}
+            Screen::History => {
+                let len = self
+                    .history
+                    .as_ref()
+                    .map_or(0, |report| report.top_songs.len());
+                self.history_cursor = if last { len.saturating_sub(1) } else { 0 };
+            }
+            Screen::TagEditor => {
+                self.tag_editor.cursor = if last {
+                    self.tag_editor.fields.len().saturating_sub(1)
+                } else {
+                    0
+                };
+            }
         }
     }
 
@@ -644,6 +1605,13 @@ impl App {
     }
 
     fn change_pane(&mut self, delta: isize) {
+        if self.screen == Screen::Playlists {
+            self.playlist_pane = match self.playlist_pane {
+                PlaylistPane::Playlists => PlaylistPane::Songs,
+                PlaylistPane::Songs => PlaylistPane::Playlists,
+            };
+            return;
+        }
         let index = (self.library_view.pane as isize + delta).rem_euclid(3);
         self.library_view.pane = match index {
             0 => LibraryPane::Artists,
@@ -671,6 +1639,7 @@ impl App {
                 status.state = PlaybackState::Playing;
             }
         }
+        self.publish_mpris();
     }
 
     fn change_volume(&mut self, delta: i16) {
@@ -684,6 +1653,7 @@ impl App {
         if let Some(status) = &mut self.status {
             status.volume = Some(volume);
         }
+        self.publish_mpris();
     }
 
     fn toggle_option(&mut self, option: PlayerOption) {
@@ -703,6 +1673,7 @@ impl App {
                 PlayerOption::Consume => status.consume = enabled,
             }
         }
+        self.publish_mpris();
     }
 
     fn play_selected(&mut self) {
@@ -720,19 +1691,65 @@ impl App {
                     self.mpd.send(Command::AppendAndPlay(uris));
                 }
             }
+            Screen::Playlists => self.play_playlist_selection(),
             Screen::Outputs => self.toggle_output(),
-            Screen::Stats => {}
+            Screen::History => {
+                if let Some(report) = &self.history
+                    && let Some(song) = report.top_songs.get(self.history_cursor)
+                {
+                    self.mpd
+                        .send(Command::AppendAndPlay(vec![song.uri.clone()]));
+                }
+            }
+            Screen::Stats | Screen::Lyrics | Screen::Visualizer | Screen::TagEditor => {}
+        }
+    }
+
+    fn play_playlist_selection(&mut self) {
+        match self.playlist_pane {
+            PlaylistPane::Playlists => {
+                if let Some(name) = self.selected_playlist_name() {
+                    self.mpd.send(Command::LoadPlaylist {
+                        name,
+                        replace: true,
+                    });
+                }
+            }
+            PlaylistPane::Songs => {
+                if let Some(song) = self.playlist_songs.get(self.playlist_songs_view.cursor) {
+                    self.mpd
+                        .send(Command::AppendAndPlay(vec![song.uri.to_string()]));
+                }
+            }
         }
     }
 
     fn enqueue_selected(&mut self) {
-        if self.screen != Screen::Library {
-            return;
+        if self.screen == Screen::Library {
+            let uris = self.selected_uris();
+            if !uris.is_empty() {
+                self.toast_info(format!("Enqueued {} track(s)", uris.len()));
+                self.mpd.send(Command::AppendUris(uris));
+            }
+        } else if self.screen == Screen::Playlists {
+            self.enqueue_playlist_selection();
         }
-        let uris = self.selected_uris();
-        if !uris.is_empty() {
-            self.toast_info(format!("Enqueued {} track(s)", uris.len()));
-            self.mpd.send(Command::AppendUris(uris));
+    }
+
+    fn enqueue_playlist_selection(&mut self) {
+        match self.playlist_pane {
+            PlaylistPane::Playlists => {
+                if let Some(name) = self.selected_playlist_name() {
+                    self.toast_info(format!("Enqueued playlist \"{name}\""));
+                    self.mpd.send(Command::AppendPlaylist(name));
+                }
+            }
+            PlaylistPane::Songs => {
+                if let Some(song) = self.playlist_songs.get(self.playlist_songs_view.cursor) {
+                    self.mpd
+                        .send(Command::AppendUris(vec![song.uri.to_string()]));
+                }
+            }
         }
     }
 
@@ -782,13 +1799,68 @@ impl App {
     }
 
     fn remove_selected(&mut self) {
-        if self.screen != Screen::Queue {
+        if self.screen == Screen::Queue {
+            if let Some(song) = self.queue.get(self.queue_view.cursor)
+                && let Some(id) = song.id
+            {
+                self.mpd.send(Command::RemoveId(id));
+            }
             return;
         }
-        if let Some(song) = self.queue.get(self.queue_view.cursor)
-            && let Some(id) = song.id
+
+        if self.screen == Screen::Playlists
+            && self.playlist_pane == PlaylistPane::Songs
+            && self.playlist_songs_view.cursor < self.playlist_songs.len()
+            && let Some(name) = self.selected_playlist_name()
         {
-            self.mpd.send(Command::RemoveId(id));
+            self.mpd.send(Command::PlaylistRemoveSong {
+                name,
+                position: self.playlist_songs_view.cursor as u32,
+            });
+        }
+    }
+
+    fn move_selected_item(&mut self, delta: isize) {
+        match self.screen {
+            Screen::Queue => self.move_queue_selection(delta),
+            Screen::Playlists if self.playlist_pane == PlaylistPane::Songs => {
+                self.move_playlist_song(delta);
+            }
+            _ => {}
+        }
+    }
+
+    fn move_playlist_song(&mut self, delta: isize) {
+        let from = self.playlist_songs_view.cursor;
+        let to = from.saturating_add_signed(delta);
+        if to == from || to >= self.playlist_songs.len() {
+            return;
+        }
+        let Some(name) = self.selected_playlist_name() else {
+            return;
+        };
+        self.playlist_songs.swap(from, to);
+        self.playlist_songs_view.cursor = to;
+        self.mpd.send(Command::PlaylistMoveSong {
+            name,
+            from: from as u32,
+            to: to as u32,
+        });
+    }
+
+    fn move_playlist_selection(&mut self, delta: isize) {
+        match self.playlist_pane {
+            PlaylistPane::Playlists => {
+                let before = self.playlists_view.cursor;
+                self.playlists_view.move_by(delta, self.playlists.len());
+                if self.playlists_view.cursor != before {
+                    self.ensure_playlist_songs();
+                }
+            }
+            PlaylistPane::Songs => {
+                self.playlist_songs_view
+                    .move_by(delta, self.playlist_songs.len());
+            }
         }
     }
 
@@ -812,6 +1884,123 @@ impl App {
         self.mpd.send(Command::MoveId { id, to: to as u32 });
     }
 
+    pub fn selected_playlist_name(&self) -> Option<String> {
+        self.playlists
+            .get(self.playlists_view.cursor)
+            .map(|playlist| playlist.name.to_string())
+    }
+
+    fn ensure_playlist_songs(&mut self) {
+        if self.screen != Screen::Playlists {
+            return;
+        }
+        match self.selected_playlist_name() {
+            Some(name) => {
+                if self.loaded_playlist.as_deref() != Some(name.as_str()) {
+                    self.loaded_playlist = Some(name.clone());
+                    self.playlist_songs.clear();
+                    self.playlist_songs_view.reset();
+                    self.mpd.send(Command::RefreshPlaylistSongs(name));
+                }
+            }
+            None => {
+                self.loaded_playlist = None;
+                self.playlist_songs.clear();
+                self.playlist_songs_view.reset();
+            }
+        }
+    }
+
+    fn open_save_playlist(&mut self) {
+        if self.queue.is_empty() {
+            self.toast_info("Queue is empty");
+            return;
+        }
+        self.input = Some(InputModal {
+            prompt: "Save queue as playlist".into(),
+            value: String::new(),
+            action: InputAction::SaveQueueAsPlaylist,
+        });
+    }
+
+    fn open_rename_playlist(&mut self) {
+        let Some(name) = self.selected_playlist_name() else {
+            return;
+        };
+        self.input = Some(InputModal {
+            prompt: "Rename playlist".into(),
+            value: name.clone(),
+            action: InputAction::RenamePlaylist { from: name },
+        });
+    }
+
+    fn request_delete_playlist(&mut self) {
+        let Some(name) = self.selected_playlist_name() else {
+            return;
+        };
+        self.confirm = Some(Confirm {
+            message: format!("Delete playlist \"{name}\"?"),
+            action: ConfirmAction::DeletePlaylist(name),
+        });
+    }
+
+    fn handle_input_key(&mut self, key: KeyEvent) {
+        let Some(mut modal) = self.input.take() else {
+            return;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {}
+            KeyCode::Enter => {
+                let value = modal.value.trim().to_string();
+                let action = modal.action.clone();
+                match action {
+                    InputAction::SaveQueueAsPlaylist => {
+                        if value.is_empty() {
+                            self.input = Some(modal);
+                            return;
+                        }
+                        self.mpd.send(Command::SaveQueueAs(value.clone()));
+                        self.toast_info(format!("Saved playlist \"{value}\""));
+                    }
+                    InputAction::RenamePlaylist { from } => {
+                        if value.is_empty() {
+                            self.input = Some(modal);
+                            return;
+                        }
+                        if from != value {
+                            self.mpd.send(Command::RenamePlaylist {
+                                from,
+                                to: value.clone(),
+                            });
+                            self.toast_info(format!("Renamed playlist to \"{value}\""));
+                        }
+                    }
+                    InputAction::EditTagField { index } => {
+                        if let Some(field) = self.tag_editor.fields.get_mut(index) {
+                            field.value = value;
+                            self.tag_editor.dirty = true;
+                            self.tag_editor.message = None;
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                modal.value.pop();
+                self.input = Some(modal);
+            }
+            KeyCode::Char('u') if ctrl => {
+                modal.value.clear();
+                self.input = Some(modal);
+            }
+            KeyCode::Char(character) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+                modal.value.push(character);
+                self.input = Some(modal);
+            }
+            _ => self.input = Some(modal),
+        }
+    }
+
     fn request_clear_queue(&mut self) {
         if self.queue.is_empty() {
             return;
@@ -831,6 +2020,11 @@ impl App {
                 self.mpd.send(Command::Clear);
                 self.toast_info("Queue cleared");
             }
+            ConfirmAction::DeletePlaylist(name) => {
+                self.toast_info(format!("Deleted playlist \"{name}\""));
+                self.mpd.send(Command::DeletePlaylist(name));
+            }
+            ConfirmAction::SaveTags => self.save_tags(),
         }
     }
 
@@ -945,18 +2139,36 @@ impl App {
 mod tests {
     use super::*;
 
+    fn test_config() -> Config {
+        let mut config = Config::default();
+        config.stats.enabled = false;
+        config
+    }
+
     fn app() -> App {
         App::new(
-            Config::default(),
+            test_config(),
             MpdHandle::test_handle(),
             SearchHandle::test_handle(),
+            Picker::halfblocks(),
+            watch::channel(MprisSnapshot::default()).0,
+            None,
+            mpsc::unbounded_channel().0,
         )
     }
 
     fn app_with_commands() -> (App, mpsc::UnboundedReceiver<Command>) {
         let (mpd, receiver) = MpdHandle::test_channel();
         (
-            App::new(Config::default(), mpd, SearchHandle::test_handle()),
+            App::new(
+                test_config(),
+                mpd,
+                SearchHandle::test_handle(),
+                Picker::halfblocks(),
+                watch::channel(MprisSnapshot::default()).0,
+                None,
+                mpsc::unbounded_channel().0,
+            ),
             receiver,
         )
     }
@@ -968,8 +2180,12 @@ mod tests {
     #[test]
     fn screens_cycle_both_ways() {
         assert_eq!(Screen::Queue.next(), Screen::Library);
-        assert_eq!(Screen::Queue.previous(), Screen::Stats);
-        assert_eq!(Screen::Stats.next(), Screen::Queue);
+        assert_eq!(Screen::Queue.previous(), Screen::History);
+        assert_eq!(Screen::Stats.next(), Screen::Lyrics);
+        assert_eq!(Screen::Lyrics.next(), Screen::Visualizer);
+        assert_eq!(Screen::Visualizer.next(), Screen::TagEditor);
+        assert_eq!(Screen::TagEditor.next(), Screen::History);
+        assert_eq!(Screen::History.next(), Screen::Queue);
         assert_eq!(Screen::from_name("LIBRARY"), Screen::Library);
         assert_eq!(Screen::from_name("nonsense"), Screen::Queue);
     }
@@ -1088,6 +2304,518 @@ mod tests {
         app.on_key(key(KeyCode::Char('p')));
         assert!(!app.help);
         assert!(commands.try_recv().is_err(), "help must not play/pause");
+    }
+
+    #[test]
+    fn enter_on_a_playlist_loads_and_plays_it() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::Playlists;
+        app.playlists = vec![Playlist {
+            name: Arc::from("Late Night"),
+            last_modified: None,
+        }];
+        app.playlists_view.cursor = 0;
+        app.on_key(key(KeyCode::Enter));
+        match commands.try_recv() {
+            Ok(Command::LoadPlaylist { name, replace }) => {
+                assert_eq!(name, "Late Night");
+                assert!(replace);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_queue_as_playlist_uses_the_input_modal() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::Playlists;
+        app.queue = vec![Song {
+            id: Some(1),
+            uri: Arc::from("a/one.flac"),
+            ..Song::default()
+        }];
+        app.on_key(key(KeyCode::Char('S')));
+        assert!(app.input.is_some(), "saving must prompt for a name");
+        for character in "Chill".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        match commands.try_recv() {
+            Ok(Command::SaveQueueAs(name)) => assert_eq!(name, "Chill"),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        assert!(app.input.is_none());
+    }
+
+    #[test]
+    fn deleting_a_playlist_requires_confirmation() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::Playlists;
+        app.playlists = vec![Playlist {
+            name: Arc::from("Mix"),
+            last_modified: None,
+        }];
+        app.playlists_view.cursor = 0;
+        app.on_key(key(KeyCode::Char('x')));
+        assert!(app.confirm.is_some());
+        assert!(commands.try_recv().is_err());
+        app.on_key(key(KeyCode::Char('y')));
+        match commands.try_recv() {
+            Ok(Command::DeletePlaylist(name)) => assert_eq!(name, "Mix"),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn removing_a_playlist_song_sends_its_position() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::Playlists;
+        app.playlist_pane = PlaylistPane::Songs;
+        app.playlists = vec![Playlist {
+            name: Arc::from("Mix"),
+            last_modified: None,
+        }];
+        app.playlists_view.cursor = 0;
+        app.playlist_songs = vec![Song {
+            uri: Arc::from("a/one.flac"),
+            ..Song::default()
+        }];
+        app.on_key(key(KeyCode::Char('d')));
+        match commands.try_recv() {
+            Ok(Command::PlaylistRemoveSong { name, position }) => {
+                assert_eq!(name, "Mix");
+                assert_eq!(position, 0);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reordering_playlist_songs_updates_locally_and_on_mpd() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::Playlists;
+        app.playlist_pane = PlaylistPane::Songs;
+        app.playlists = vec![Playlist {
+            name: Arc::from("Mix"),
+            last_modified: None,
+        }];
+        app.playlists_view.cursor = 0;
+        app.playlist_songs = vec![
+            Song {
+                uri: Arc::from("a/one.flac"),
+                ..Song::default()
+            },
+            Song {
+                uri: Arc::from("a/two.flac"),
+                ..Song::default()
+            },
+        ];
+        app.on_key(key(KeyCode::Char('J')));
+        assert_eq!(app.playlist_songs[0].uri.as_ref(), "a/two.flac");
+        assert_eq!(app.playlist_songs_view.cursor, 1);
+        match commands.try_recv() {
+            Ok(Command::PlaylistMoveSong { name, from, to }) => {
+                assert_eq!(name, "Mix");
+                assert_eq!((from, to), (0, 1));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn requests_cover_art_for_the_current_song_once() {
+        let (mut app, mut commands) = app_with_commands();
+        app.current = Some(Song {
+            uri: Arc::from("a/one.flac"),
+            ..Song::default()
+        });
+        app.request_cover();
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::FetchCover(uri)) if uri == "a/one.flac"
+        ));
+        app.request_cover();
+        assert!(
+            commands.try_recv().is_err(),
+            "must not refetch the same song"
+        );
+    }
+
+    #[test]
+    fn decodes_embedded_cover_art_into_a_protocol() {
+        let mut app = app();
+        let image = image::RgbImage::from_pixel(2, 2, image::Rgb([200, 50, 50]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        app.set_cover(Some(Arc::new(Picture {
+            mime: Arc::from("image/png"),
+            data: bytes.into_inner(),
+        })));
+        assert!(app.cover_protocol.is_some());
+        app.set_cover(None);
+        assert!(app.cover_protocol.is_none());
+    }
+
+    #[test]
+    fn cover_sidebar_paints_halfblocks() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        app.current = Some(Song {
+            uri: Arc::from("a/one.flac"),
+            title: Some(Arc::from("A Track")),
+            artist: Some(Arc::from("An Artist")),
+            album: Some(Arc::from("An Album")),
+            ..Song::default()
+        });
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([200, 50, 50]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        app.set_cover(Some(Arc::new(Picture {
+            mime: Arc::from("image/png"),
+            data: bytes.into_inner(),
+        })));
+
+        let backend = TestBackend::new(150, 42);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("Now Playing"));
+        assert!(text.contains('▀'), "halfblock cover art should be painted");
+    }
+
+    #[test]
+    fn requests_and_caches_lyrics() {
+        use crate::lyrics::{LyricLine, LyricsSource};
+
+        let (mut app, mut commands) = app_with_commands();
+        app.current = Some(Song {
+            uri: Arc::from("a/one.flac"),
+            artist: Some(Arc::from("Portishead")),
+            album: Some(Arc::from("Dummy")),
+            title: Some(Arc::from("Mysterons")),
+            duration: Some(Duration::from_secs(206)),
+            ..Song::default()
+        });
+        app.request_lyrics(false);
+        match commands.try_recv() {
+            Ok(Command::FetchLyrics {
+                uri,
+                artist,
+                title,
+                album,
+                duration_seconds,
+                ..
+            }) => {
+                assert_eq!(uri, "a/one.flac");
+                assert_eq!(artist, "Portishead");
+                assert_eq!(title, "Mysterons");
+                assert_eq!(album, "Dummy");
+                assert_eq!(duration_seconds, Some(206));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let doc = LyricsDoc {
+            source: Some(LyricsSource::Lrclib),
+            synced: vec![LyricLine {
+                at: Duration::from_secs(12),
+                text: "Hello".into(),
+            }],
+            plain: None,
+        };
+        app.on_msg(Msg::Lyrics {
+            uri: "a/one.flac".into(),
+            doc: Some(doc),
+        });
+        assert!(app.lyrics.doc.is_some());
+        assert!(!app.lyrics.loading);
+
+        app.request_lyrics(false);
+        assert!(
+            commands.try_recv().is_err(),
+            "the second request should hit the cache"
+        );
+    }
+
+    #[test]
+    fn lyrics_offset_scales_with_brackets() {
+        let (mut app, mut _commands) = app_with_commands();
+        app.screen = Screen::Lyrics;
+        app.on_key(key(KeyCode::Char(']')));
+        app.on_key(key(KeyCode::Char(']')));
+        assert_eq!(app.lyrics.offset_ms, 1000);
+        app.on_key(key(KeyCode::Char('[')));
+        assert_eq!(app.lyrics.offset_ms, 500);
+        assert_eq!(
+            app.lyrics.adjusted_position(Duration::from_secs(10)),
+            Duration::from_millis(10_500)
+        );
+    }
+
+    #[test]
+    fn lyrics_screen_renders_the_active_line() {
+        use crate::lyrics::{LyricLine, LyricsSource};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        app.screen = Screen::Lyrics;
+        app.current = Some(Song {
+            uri: Arc::from("a/one.flac"),
+            title: Some(Arc::from("Track")),
+            artist: Some(Arc::from("Artist")),
+            duration: Some(Duration::from_secs(100)),
+            ..Song::default()
+        });
+        app.status = Some(MpdStatus {
+            state: PlaybackState::Playing,
+            elapsed: Duration::from_secs(25),
+            duration: Some(Duration::from_secs(100)),
+            ..MpdStatus::default()
+        });
+        app.elapsed_at_sync = Duration::from_secs(25);
+        app.elapsed_synced_at = Instant::now();
+        app.lyrics.doc = Some(LyricsDoc {
+            source: Some(LyricsSource::Lrclib),
+            synced: vec![
+                LyricLine {
+                    at: Duration::from_secs(10),
+                    text: "first line".into(),
+                },
+                LyricLine {
+                    at: Duration::from_secs(20),
+                    text: "active line".into(),
+                },
+                LyricLine {
+                    at: Duration::from_secs(30),
+                    text: "future line".into(),
+                },
+            ],
+            plain: None,
+        });
+
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("Lyrics"));
+        assert!(text.contains("active line"));
+        assert!(text.contains("future line"));
+    }
+
+    #[test]
+    fn visualizer_screen_paints_bars() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        app.screen = Screen::Visualizer;
+        app.config.visualizer.enabled = true;
+        app.spectrum = vec![0.5; 64];
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains('█'), "spectrum bars should be painted");
+    }
+
+    #[test]
+    fn tag_editor_loads_and_parses_fields() {
+        let song = Song {
+            uri: Arc::from("a/one.flac"),
+            title: Some(Arc::from("Title")),
+            artist: Some(Arc::from("Artist")),
+            album: Some(Arc::from("Album")),
+            album_artist: Some(Arc::from("Album Artist")),
+            track: Some(3),
+            disc: Some(1),
+            date: Some(Arc::from("2026")),
+            genre: Some(Arc::from("Test")),
+            tags: vec![(Arc::from("Comment"), Arc::from("hello"))],
+            ..Song::default()
+        };
+        let editor = TagEditorState::from_song(&song);
+        assert_eq!(editor.value(TagKey::Title), "Title");
+        assert_eq!(editor.value(TagKey::AlbumArtist), "Album Artist");
+        assert_eq!(editor.value(TagKey::Comment), "hello");
+
+        let update = editor.to_update().unwrap();
+        assert_eq!(update.track, Some(3));
+        assert_eq!(update.disc, Some(1));
+        assert_eq!(update.date, "2026");
+
+        let mut invalid = editor;
+        invalid.fields[6].value = "abc".into();
+        assert!(invalid.to_update().is_err());
+    }
+
+    #[test]
+    fn writing_tags_requires_confirmation_and_sends_the_file_path() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::TagEditor;
+        app.config.library.music_directory = Some(std::path::PathBuf::from("/music"));
+        app.current = Some(Song {
+            uri: Arc::from("a/one.flac"),
+            title: Some(Arc::from("Old")),
+            ..Song::default()
+        });
+        app.load_tag_editor();
+        app.tag_editor.fields[0].value = "New".into();
+        app.tag_editor.dirty = true;
+
+        app.on_key(key(KeyCode::Char('w')));
+        assert!(app.confirm.is_some());
+        assert!(commands.try_recv().is_err());
+
+        app.on_key(key(KeyCode::Char('y')));
+        match commands.try_recv() {
+            Ok(Command::SaveTags { path, uri, update }) => {
+                assert_eq!(path, std::path::PathBuf::from("/music/a/one.flac"));
+                assert_eq!(uri, "a/one.flac");
+                assert_eq!(update.title, "New");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn saved_tags_clear_the_dirty_flag() {
+        let mut app = app();
+        app.tag_editor.dirty = true;
+        app.on_msg(Msg::TagsSaved {
+            uri: "a/one.flac".into(),
+            backup: Some(std::path::PathBuf::from("/backup")),
+            error: None,
+        });
+        assert!(!app.tag_editor.dirty);
+    }
+
+    #[test]
+    fn scrobbles_now_playing_and_after_the_threshold() {
+        let (scrobbler, mut events) = ScrobbleHandle::test_channel();
+        let (mpd, _commands) = MpdHandle::test_channel();
+        let mut app = App::new(
+            test_config(),
+            mpd,
+            SearchHandle::test_handle(),
+            Picker::halfblocks(),
+            watch::channel(MprisSnapshot::default()).0,
+            Some(scrobbler),
+            mpsc::unbounded_channel().0,
+        );
+        app.status = Some(MpdStatus {
+            state: PlaybackState::Playing,
+            ..MpdStatus::default()
+        });
+        app.on_msg(Msg::CurrentSong(Some(Song {
+            id: Some(1),
+            uri: Arc::from("a/one.flac"),
+            artist: Some(Arc::from("Artist")),
+            title: Some(Arc::from("Title")),
+            album: Some(Arc::from("Album")),
+            duration: Some(Duration::from_secs(100)),
+            ..Song::default()
+        })));
+        match events.try_recv() {
+            Ok(event) => {
+                assert_eq!(event.kind, ScrobbleKind::NowPlaying);
+                assert_eq!(event.track.title, "Title");
+            }
+            Err(error) => panic!("missing now-playing event: {error}"),
+        }
+
+        app.on_msg(Msg::Status(MpdStatus {
+            state: PlaybackState::Playing,
+            song_id: Some(1),
+            elapsed: Duration::from_secs(60),
+            duration: Some(Duration::from_secs(100)),
+            ..MpdStatus::default()
+        }));
+        match events.try_recv() {
+            Ok(event) => assert_eq!(event.kind, ScrobbleKind::Single),
+            Err(error) => panic!("missing scrobble event: {error}"),
+        }
+        assert!(events.try_recv().is_err(), "must not scrobble twice");
+    }
+
+    #[test]
+    fn history_enter_queues_the_top_song() {
+        let (mut app, mut commands) = app_with_commands();
+        app.screen = Screen::History;
+        app.on_msg(Msg::History(crate::stats::StatsReport {
+            top_songs: vec![crate::stats::CountedSong {
+                uri: "a/one.flac".into(),
+                artist: "Artist".into(),
+                title: "Title".into(),
+                plays: 9,
+            }],
+            ..Default::default()
+        }));
+        app.on_key(key(KeyCode::Enter));
+        match commands.try_recv() {
+            Ok(Command::AppendAndPlay(uris)) => assert_eq!(uris, vec!["a/one.flac"]),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn history_screen_renders_reports() {
+        use crate::stats::{Counted, CountedSong, RecentPlay, StatsReport};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        app.screen = Screen::History;
+        app.on_msg(Msg::History(StatsReport {
+            total_plays: 12,
+            total_seconds: 3_600,
+            top_songs: vec![CountedSong {
+                uri: "a/one.flac".into(),
+                artist: "Portishead".into(),
+                title: "Sour Times".into(),
+                plays: 7,
+            }],
+            top_artists: vec![Counted {
+                name: "Portishead".into(),
+                plays: 7,
+            }],
+            top_albums: vec![Counted {
+                name: "Dummy".into(),
+                plays: 7,
+            }],
+            recent: vec![RecentPlay {
+                artist: "Portishead".into(),
+                title: "Sour Times".into(),
+                played_at: 1,
+            }],
+        }));
+        let backend = TestBackend::new(140, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("Top Songs"));
+        assert!(text.contains("Sour Times"));
+        assert!(text.contains("12 plays"));
+        assert!(text.contains("Recent"));
     }
 
     #[test]
