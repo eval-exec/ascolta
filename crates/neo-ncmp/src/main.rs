@@ -127,6 +127,12 @@ enum RemoteAction {
         id: u32,
         state: String,
     },
+    /// List partitions, marking the active one with `*`.
+    Partitions,
+    /// Switch partition (changes the queue and playback state).
+    Partition {
+        name: String,
+    },
     Status {
         #[arg(long)]
         json: bool,
@@ -249,6 +255,7 @@ async fn print_status(config: &config::Config, json: bool) -> Result<()> {
             "random": status.random,
             "single": status.single,
             "consume": status.consume,
+            "partition": status.partition.as_deref(),
         });
         println!("{}", serde_json::to_string(&value)?);
         return Ok(());
@@ -345,6 +352,19 @@ async fn remote(config: &config::Config, action: RemoteAction) -> Result<()> {
             "off" | "false" | "0" => client.disable_output(id).await?,
             other => bail!("expected on or off, got {other}"),
         },
+        RemoteAction::Partitions => {
+            let partitions = client.partitions().await?;
+            let current = client.status().await?.partition;
+            for partition in partitions {
+                let marker = if current.as_deref() == Some(partition.as_str()) {
+                    "*"
+                } else {
+                    " "
+                };
+                println!("{marker} {partition}");
+            }
+        }
+        RemoteAction::Partition { name } => client.partition(&name).await?,
         RemoteAction::Status { .. } => unreachable!("handled above"),
     }
     Ok(())

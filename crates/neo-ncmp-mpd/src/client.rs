@@ -144,6 +144,17 @@ impl MpdClient {
         Ok(parse::playlists(&response))
     }
 
+    /// Lists MPD partitions (MPD 0.22+).
+    pub async fn partitions(&mut self) -> Result<Vec<String>> {
+        let response = self.command("listpartitions", &[]).await?;
+        Ok(parse::partitions(&response))
+    }
+
+    /// Switches the active partition, changing the queue and playback state.
+    pub async fn partition(&mut self, name: &str) -> Result<()> {
+        self.command_ok("partition", &[name]).await
+    }
+
     /// Returns the songs in a stored playlist.
     pub async fn playlist_info(&mut self, name: &str) -> Result<Vec<Song>> {
         let response = self.command("listplaylistinfo", &[name]).await?;

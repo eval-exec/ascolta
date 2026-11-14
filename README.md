@@ -54,6 +54,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Tag editor with full-file backups and confirmation before writing
 - Remote CLI and machine-readable `status --json` for status bars
 - Unix-socket IPC for app-specific control (switch screens, open searches, inspect state)
+- MPD partitions: list and switch from the CLI, IPC, or `remote`
 - Configurable keymap (global + per-screen overrides) and theme colors
 - Config hot reload: edits to `config.toml` apply theme and keybindings immediately
 - Opt-in mouse support: wheel scrolling, clickable screen tabs, row selection, double-click to play
@@ -99,6 +100,8 @@ neo-ncmp remote shuffle
 neo-ncmp remote clear
 neo-ncmp remote playlist "Late Night"
 neo-ncmp remote output 0 on
+neo-ncmp remote partitions         # active partition marked with *
+neo-ncmp remote partition "headphones"
 neo-ncmp remote status --json
 ```
 
@@ -115,6 +118,7 @@ neo-ncmp ipc search "artist:portishead year:>=1990"
 neo-ncmp ipc volume 65
 neo-ncmp ipc seek 42.5
 neo-ncmp ipc playlist "Late Night"  # replace queue and play
+neo-ncmp ipc partition "headphones" # switch MPD partition
 neo-ncmp ipc notify "hello"
 ```
 

@@ -87,6 +87,9 @@ fn dispatch(request: Request, app: &mut App) -> Value {
         "action" => string_value(request.value)
             .and_then(|action| app.ipc_action(&action))
             .map(|()| Value::Null),
+        "partition" => string_value(request.value)
+            .and_then(|name| app.ipc_partition(&name))
+            .map(|()| Value::Null),
         "playlist" => string_value(request.value)
             .and_then(|name| app.ipc_play_playlist(&name))
             .map(|()| Value::Null),

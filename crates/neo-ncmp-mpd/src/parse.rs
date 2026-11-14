@@ -216,6 +216,16 @@ pub fn stats(response: &Response) -> MpdStats {
     stats
 }
 
+/// Parses `listpartitions`.
+pub fn partitions(response: &Response) -> Vec<String> {
+    response
+        .pairs()
+        .iter()
+        .filter(|(key, _)| key == "partition")
+        .map(|(_, value)| value.clone())
+        .collect()
+}
+
 pub fn playlists(response: &Response) -> Vec<Playlist> {
     let mut playlists: Vec<Playlist> = Vec::new();
     for (key, value) in response.pairs() {
@@ -367,6 +377,12 @@ mod tests {
         assert!(outputs[0].enabled);
         assert_eq!(outputs[1].name.as_ref(), "FIFO");
         assert!(!outputs[1].enabled);
+    }
+
+    #[test]
+    fn parses_partitions() {
+        let response = response(&[("partition", "default"), ("partition", "headphones")]);
+        assert_eq!(partitions(&response), vec!["default", "headphones"]);
     }
 
     #[test]

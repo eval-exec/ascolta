@@ -981,6 +981,10 @@ impl App {
                 let response = crate::ipc::handle(&line, self);
                 let _ = reply.send(response);
             }
+            Msg::PartitionChanged(name) => {
+                self.toast_info(format!("Switched to partition \"{name}\""));
+                self.mpd.send(Command::RefreshPlaylists);
+            }
             Msg::Browser { uri, entries } => {
                 if self.browser.uri == uri {
                     let mut entries = entries;
@@ -1841,6 +1845,14 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn ipc_partition(&mut self, name: &str) -> Result<(), String> {
+        if name.trim().is_empty() {
+            return Err("partition name is empty".into());
+        }
+        self.mpd.send(Command::SwitchPartition(name.to_string()));
+        Ok(())
+    }
+
     pub(crate) fn ipc_play_playlist(&mut self, name: &str) -> Result<(), String> {
         if name.trim().is_empty() {
             return Err("playlist name is empty".into());
@@ -1887,6 +1899,7 @@ impl App {
             "random": status.is_some_and(|status| status.random),
             "single": status.is_some_and(|status| status.single),
             "consume": status.is_some_and(|status| status.consume),
+            "partition": status.and_then(|status| status.partition.as_deref()),
             "elapsed": self.effective_elapsed().as_secs_f64(),
             "duration": status
                 .and_then(|status| status.duration)
@@ -3083,6 +3096,14 @@ mod tests {
         let response = crate::ipc::handle(r#"{"command":"action","value":"next_track"}"#, &mut app);
         assert!(response.contains(r#""ok":true"#));
         assert!(matches!(commands.try_recv(), Ok(Command::Next)));
+
+        let response =
+            crate::ipc::handle(r#"{"command":"partition","value":"headphones"}"#, &mut app);
+        assert!(response.contains(r#""ok":true"#));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::SwitchPartition(name)) if name == "headphones"
+        ));
 
         let response = crate::ipc::handle(r#"{"command":"status"}"#, &mut app);
         assert!(response.contains(r#""queue_length":2"#));

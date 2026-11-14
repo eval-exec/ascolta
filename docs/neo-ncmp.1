@@ -41,7 +41,8 @@ Control MPD without starting the TUI.
 .B ipc \fICOMMAND\fR [\fIVALUE\fR]
 Send a JSON line over the running instance's private Unix socket. Commands:
 \fBping\fR, \fBstatus\fR, \fBscreen\fR, \fBsearch\fR, \fBaction\fR,
-\fBvolume\fR, \fBseek\fR, \fBplaylist\fR, and \fBnotify\fR. The socket
+\fBvolume\fR, \fBseek\fR, \fBplaylist\fR, \fBpartition\fR, and
+\fBnotify\fR. The socket
 defaults to \fI$XDG_RUNTIME_DIR/neo-ncmp/socket\fR and mode 0600; configure it
 with the \fB[ipc]\fR table.
 .SH REMOTE ACTIONS
@@ -60,6 +61,12 @@ Player options.
 .TP
 .B shuffle, clear
 Queue operations.
+.TP
+.B partitions
+List MPD partitions; the active one is marked with an asterisk.
+.TP
+.B partition \fINAME\fR
+Switch partition, changing the queue and playback state.
 .TP
 .B playlist \fINAME\fR
 Replace the queue with a stored playlist and play it.

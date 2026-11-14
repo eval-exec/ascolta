@@ -58,6 +58,7 @@ pub enum Command {
     RefreshOutputs,
     RefreshStats,
     LoadLibrary,
+    SwitchPartition(String),
 
     Play,
     Pause(bool),
@@ -162,6 +163,7 @@ pub enum Msg {
         uri: String,
         picture: Option<Picture>,
     },
+    PartitionChanged(String),
     Ipc {
         line: String,
         reply: tokio::sync::oneshot::Sender<String>,
@@ -372,6 +374,12 @@ async fn execute(
         RefreshStats => {
             let stats = client.stats().await?;
             send(tx, Msg::Stats(stats));
+        }
+        SwitchPartition(name) => {
+            client.partition(&name).await?;
+            refresh_status_and_current(client, tx).await?;
+            refresh_queue(client, tx).await?;
+            send(tx, Msg::PartitionChanged(name));
         }
         LoadLibrary => spawn_library_load(endpoint.clone(), tx.clone()),
 

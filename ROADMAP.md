@@ -62,7 +62,7 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 - [ ] Last.fm browser-auth flow and `lastfm-auth` helper
 - [x] Unix-socket IPC for app-specific remote commands, plus `neo-ncmp ipc`
 - [ ] Scrobble editing/queue inspection UI
-- [ ] Multi-partition support
+- [x] Multi-partition support: list/switch via CLI, IPC, and status display
 
 ### Quality and distribution
 
