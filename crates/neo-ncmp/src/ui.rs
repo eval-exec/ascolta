@@ -1751,7 +1751,7 @@ fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "Enter play · Ctrl-U clear · Esc close",
+            "Enter play · artist: album: genre: year:>= · -filter excludes · Esc close",
             dim_style(),
         ))),
         footer_area,

@@ -12,6 +12,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use tokio::sync::mpsc;
 
+use crate::filter::{Query, Values};
 use crate::mpd_worker::Msg;
 use crate::widgets::ListView;
 
@@ -40,6 +41,8 @@ pub struct SearchItem {
     pub detail: String,
     /// Normalised text that the fuzzy matcher scores against.
     pub haystack: String,
+    /// Lowercased fields used by structured filters.
+    pub values: Values,
     /// Everything that should be enqueued if this item is chosen.
     pub uris: Vec<Arc<str>>,
 }
@@ -67,6 +70,10 @@ impl SearchIndex {
                     plural(tracks)
                 ),
                 haystack: artist.name.to_string(),
+                values: Values {
+                    artist: artist.name.to_lowercase(),
+                    ..Values::default()
+                },
                 uris: artist
                     .albums
                     .iter()
@@ -92,6 +99,13 @@ impl SearchIndex {
                         artist.name,
                         album.year.as_deref().unwrap_or_default()
                     ),
+                    values: Values {
+                        album: album.name.to_lowercase(),
+                        artist: artist.name.to_lowercase(),
+                        album_artist: artist.name.to_lowercase(),
+                        year: album.year.as_deref().and_then(|year| year.parse().ok()),
+                        ..Values::default()
+                    },
                     uris: album
                         .songs
                         .iter()
@@ -114,6 +128,20 @@ impl SearchIndex {
                     song.display_album(),
                     song.uri
                 ),
+                values: Values {
+                    title: song.display_title().to_lowercase(),
+                    artist: song.display_artist().to_lowercase(),
+                    album: song.display_album().to_lowercase(),
+                    album_artist: song
+                        .album_artist
+                        .as_deref()
+                        .unwrap_or_else(|| song.display_artist())
+                        .to_lowercase(),
+                    genre: song.genre.as_deref().unwrap_or_default().to_lowercase(),
+                    format: song.format.as_deref().unwrap_or_default().to_lowercase(),
+                    uri: song.uri.to_lowercase(),
+                    year: song.year().and_then(|year| year.parse().ok()),
+                },
                 uris: vec![song.uri.clone()],
             });
         }
@@ -134,7 +162,14 @@ impl SearchIndex {
     /// Pure and CPU-bound: the UI runs this on a blocking worker so keystrokes
     /// are never delayed, regardless of library size.
     pub fn score(&self, query: &str) -> Vec<usize> {
-        let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+        let query = Query::parse(query);
+        let pattern = (!query.terms.is_empty()).then(|| {
+            Pattern::parse(
+                &query.fuzzy_terms(),
+                CaseMatching::Smart,
+                Normalization::Smart,
+            )
+        });
         let mut matcher = Matcher::new(Config::DEFAULT);
         let mut buffer = Vec::new();
 
@@ -142,10 +177,12 @@ impl SearchIndex {
             .items
             .iter()
             .enumerate()
-            .filter_map(|(position, item)| {
-                pattern
+            .filter(|(_, item)| query.matches(&item.values))
+            .filter_map(|(position, item)| match &pattern {
+                Some(pattern) => pattern
                     .score(Utf32Str::new(&item.haystack, &mut buffer), &mut matcher)
-                    .map(|score| (score, position))
+                    .map(|score| (score, position)),
+                None => Some((0, position)),
             })
             .collect();
 
@@ -296,6 +333,22 @@ mod tests {
         ]))
     }
 
+    fn dated_song(artist: &str, album: &str, title: &str, year: &str, genre: &str) -> Song {
+        let mut song = song(artist, album, title);
+        song.date = Some(Arc::from(format!("{year}-01-01")));
+        song.genre = Some(Arc::from(genre));
+        song.format = Some(Arc::from("FLAC"));
+        song
+    }
+
+    fn dated_index() -> SearchIndex {
+        SearchIndex::build(&Library::build(vec![
+            dated_song("Portishead", "Dummy", "Sour Times", "1994", "Trip-Hop"),
+            dated_song("Portishead", "Third", "The Rip", "2008", "Rock"),
+            dated_song("Massive Attack", "Mezzanine", "Angel", "1998", "Trip-Hop"),
+        ]))
+    }
+
     #[test]
     fn indexes_artists_albums_and_songs() {
         let index = index();
@@ -351,6 +404,84 @@ mod tests {
                 .iter()
                 .any(|&position| index.items[position].kind == SearchKind::Song)
         );
+    }
+
+    #[test]
+    fn structured_filters_narrow_by_artist_and_album() {
+        let index = index();
+        let mut state = SearchState {
+            query: r#"artist:portishead album:"dummy""#.into(),
+            ..SearchState::default()
+        };
+        state.update(&index);
+        assert!(!state.results.is_empty());
+        for &position in &state.results {
+            let item = &index.items[position];
+            assert!(item.values.artist.contains("portishead"));
+            if item.kind != SearchKind::Artist {
+                assert_eq!(item.values.album, "dummy");
+            }
+        }
+
+        let mut state = SearchState {
+            query: "artist:portishead sour".into(),
+            ..SearchState::default()
+        };
+        state.update(&index);
+        let selected = state.selected(&index).expect("a match");
+        assert_eq!(selected.title, "Sour Times");
+    }
+
+    #[test]
+    fn year_filters_use_numeric_comparisons() {
+        let index = dated_index();
+        for (query, expected) in [
+            ("year:1990-1999", vec!["Sour Times", "Angel"]),
+            ("year:>=2000", vec!["The Rip"]),
+            ("year:<1998", vec!["Sour Times"]),
+        ] {
+            let mut state = SearchState {
+                query: query.into(),
+                ..SearchState::default()
+            };
+            state.update(&index);
+            let mut titles: Vec<&str> = state
+                .results
+                .iter()
+                .map(|&position| index.items[position].title.as_str())
+                .filter(|title| expected.contains(title))
+                .collect();
+            titles.sort_unstable();
+            let mut expected = expected;
+            expected.sort_unstable();
+            assert_eq!(titles, expected, "query {query}");
+        }
+    }
+
+    #[test]
+    fn negated_filters_exclude_matches() {
+        let index = dated_index();
+        let mut state = SearchState {
+            query: "-genre:rock".into(),
+            ..SearchState::default()
+        };
+        state.update(&index);
+        assert!(!state.results.is_empty());
+        assert!(!state.results.iter().any(|&position| {
+            index.items[position].kind == SearchKind::Song
+                && index.items[position].title == "The Rip"
+        }));
+    }
+
+    #[test]
+    fn malformed_filters_still_search_fuzzily() {
+        let index = index();
+        let mut state = SearchState {
+            query: "year:nineties".into(),
+            ..SearchState::default()
+        };
+        state.update(&index);
+        assert_eq!(state.results.len(), 0);
     }
 
     #[test]

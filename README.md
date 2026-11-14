@@ -35,6 +35,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Artist → album → track browser, case-insensitive, grouped by album artist
 - Directory-first file browser (`0`) over MPD `lsinfo`; open folders, enqueue, or replace the queue
 - Library-wide fuzzy search (`/`) using `nucleo-matcher`, run on a coalescing worker
+- Structured search filters: `artist:`, `album:`, `title:`, `genre:`, `format:`, `year:>=1990`, `-genre:rock`
 - Stored playlists: browse, load/play, append, save queue as, rename, delete, edit songs
 - Command palette (`:`) for every global action
 - Session restore: last screen, cursors, playlists pane, lyrics offset
@@ -133,9 +134,9 @@ Defaults match ncmpcpp where practical. Every binding is overridable under
 | --- | --- |
 | `?` | Toggle help (full list) |
 | `:` | Command palette |
-| `/` | Fuzzy search the library |
+| `/` | Fuzzy search the library (supports field filters) |
 | `q`, `Ctrl-C` | Quit |
-| `1`–`9` | Queue / Library / Playlists / Outputs / Stats / Lyrics / Visualizer / Tags / History |
+| `1`–`9`, `0` | Queue / Library / Playlists / Outputs / Stats / Lyrics / Visualizer / Tags / History / Browser |
 | `Tab`, `Shift-Tab` | Next / previous screen |
 | `j` `k`, arrows | Move cursor |
 | `Ctrl-D` / `Ctrl-U` | Half-page down / up |
@@ -153,11 +154,35 @@ Defaults match ncmpcpp where practical. Every binding is overridable under
 | `C` / `S` (queue) | Clear (confirms) / shuffle |
 | `S` `e` `x` (playlists) | Save queue as / rename / delete |
 | `h` / `l` (library/playlists) | Previous / next pane |
+| `h`, `Backspace` (browser) | Parent directory |
 | `w` (tags) | Write tags to disk (backs up first) |
 | `o` `[` `]` (lyrics) | Refetch / offset -0.5s / +0.5s |
 | `Enter` (history) | Queue the selected most-played song |
+| `a` / `A` (browser) | Enqueue / replace queue and play |
 | `Enter` (outputs) | Toggle output |
-| `R` | Reload state/library (or History) |
+| `R` | Reload state/library (or History/Browser) |
+
+### Search filters
+
+The search overlay understands field filters alongside fuzzy terms:
+
+```
+artist:portishead album:"third" year:>=2008 -genre:rock sour
+```
+
+| Filter | Matches |
+| --- | --- |
+| `title:`, `t:` | Song title (fuzzy terms still rank the result) |
+| `artist:`, `a:` | Artist (album artist as fallback) |
+| `album:`, `al:` | Album name |
+| `albumartist:`, `aa:` | Album-artist tag |
+| `genre:`, `g:` | Genre tag |
+| `year:`, `date:` | Four-digit year: `1998`, `>=1990`, `<2000`, `1990-1999` |
+| `format:`, `f:` | MPD-reported format, such as `FLAC` or `MP3` |
+| `uri:`, `path:` | File URI/path |
+
+Prefix any filter with `-` to exclude matches (`-genre:rock`). Quote values that
+contain spaces. Unknown fields and unparseable years stay ordinary fuzzy terms.
 
 Example override:
 
