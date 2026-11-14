@@ -51,7 +51,7 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 
 - [x] Structured filter DSL (`artist:`, `album:`, `year:>=1990`, negated filters)
 - [x] Saved smart playlists: named filter queries in the palette; play or enqueue all results
-- [ ] Multi-column configurable layout (beyond the built-in adaptive layout)
+- [x] Configurable multi-column layout: cover sidebar and pane proportions
 - [x] Mouse support (opt-in): wheel, header tabs, row selection, double-click actions
 - [x] Search history (persisted) and saved filter queries
 - [ ] Track-list and playlist MPRIS interfaces

@@ -294,9 +294,12 @@ fn pane_block(title: &str, active: bool) -> Block<'static> {
 }
 
 fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
-    let (queue_area, cover_area) = if area.width >= 110 {
+    let layout = &app.config.layout;
+    let with_cover = layout.cover_sidebar && area.width >= layout.cover_width.saturating_add(40);
+    let (queue_area, cover_area) = if with_cover {
         let [queue_area, cover_area] =
-            Layout::horizontal([Constraint::Min(40), Constraint::Length(40)]).areas(area);
+            Layout::horizontal([Constraint::Min(40), Constraint::Length(layout.cover_width)])
+                .areas(area);
         (queue_area, Some(cover_area))
     } else {
         (area, None)
@@ -453,10 +456,11 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     }
 
+    let layout = &app.config.layout;
     let [artists_area, albums_area, songs_area] = Layout::horizontal([
-        Constraint::Percentage(30),
-        Constraint::Percentage(32),
-        Constraint::Percentage(38),
+        Constraint::Percentage(layout.artists_width),
+        Constraint::Percentage(layout.albums_width),
+        Constraint::Percentage(layout.songs_width),
     ])
     .areas(area);
 
@@ -549,8 +553,12 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
-    let [playlists_area, songs_area] =
-        Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)]).areas(area);
+    let playlists_width = app.config.layout.playlists_width.min(90);
+    let [playlists_area, songs_area] = Layout::horizontal([
+        Constraint::Percentage(playlists_width),
+        Constraint::Percentage(100u16.saturating_sub(playlists_width)),
+    ])
+    .areas(area);
     let (playlist_count, song_count) = (app.playlists.len(), app.playlist_songs.len());
     let pane = app.playlist_pane;
     let selected_name = app.selected_playlist_name();

@@ -17,6 +17,7 @@ pub struct Config {
     pub search: SearchConfig,
     pub artwork: ArtworkConfig,
     pub ipc: IpcConfig,
+    pub layout: LayoutConfig,
     /// `[keys.<context>]` tables: key spec -> action name.
     pub keys: HashMap<String, HashMap<String, String>>,
     pub theme: ThemeConfig,
@@ -130,6 +131,33 @@ impl ScrobblingConfig {
             && !self.lastfm_api_key.is_empty()
             && !self.lastfm_api_secret.is_empty()
             && !self.lastfm_session_key.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LayoutConfig {
+    /// Show the Now Playing sidebar on the queue screen.
+    pub cover_sidebar: bool,
+    pub cover_width: u16,
+    /// Library pane percentages; each pane needs at least a few columns.
+    pub artists_width: u16,
+    pub albums_width: u16,
+    pub songs_width: u16,
+    /// Width of the playlist list on the Playlists screen.
+    pub playlists_width: u16,
+}
+
+impl Default for LayoutConfig {
+    fn default() -> Self {
+        Self {
+            cover_sidebar: true,
+            cover_width: 40,
+            artists_width: 30,
+            albums_width: 32,
+            songs_width: 38,
+            playlists_width: 30,
+        }
     }
 }
 
@@ -350,6 +378,13 @@ mod tests {
             enabled = false
             path = "/tmp/neo-ncmp-test.sock"
 
+            [layout]
+            cover_sidebar = false
+            cover_width = 32
+            artists_width = 25
+            albums_width = 35
+            songs_width = 40
+
             [theme]
             accent = '#ff00ff'
             "#,
@@ -373,6 +408,9 @@ mod tests {
             config.ipc.socket_path(),
             std::path::PathBuf::from("/tmp/neo-ncmp-test.sock")
         );
+        assert!(!config.layout.cover_sidebar);
+        assert_eq!(config.layout.cover_width, 32);
+        assert_eq!(config.layout.songs_width, 40);
         assert!(config.scrobbling.listenbrainz_enabled());
         assert!(!config.scrobbling.lastfm_enabled());
         assert_eq!(config.keys["queue"]["d"], "play_selected");

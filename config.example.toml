@@ -28,6 +28,17 @@ restore_session = true
 # clicking a row selects it, and double-clicking activates it.
 mouse = false
 
+[layout]
+# Show album art / Now Playing beside the queue, and customize pane widths.
+cover_sidebar = true
+cover_width = 40
+# Library pane percentages.
+artists_width = 30
+albums_width = 32
+songs_width = 38
+# Playlist list width, with the songs pane taking the rest.
+playlists_width = 30
+
 [library]
 # Root of MPD's music directory. Required for local .lrc files and tag editing.
 music_directory = "/home/you/Music"

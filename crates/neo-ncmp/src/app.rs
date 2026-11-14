@@ -3626,6 +3626,57 @@ mod tests {
     }
 
     #[test]
+    fn layout_can_hide_the_cover_sidebar() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        app.config.layout.cover_sidebar = false;
+        app.current = Some(Song {
+            uri: Arc::from("a/one.flac"),
+            title: Some(Arc::from("A Track")),
+            ..Song::default()
+        });
+        let backend = TestBackend::new(150, 42);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!text.contains("Now Playing"));
+        assert!(text.contains("Queue"));
+
+        app.config.layout.artists_width = 0;
+        app.config.layout.albums_width = 0;
+        app.config.layout.songs_width = 100;
+        app.library = Some(Arc::new(Library::build(vec![Song {
+            uri: Arc::from("a/one.flac"),
+            artist: Some(Arc::from("An Artist")),
+            album: Some(Arc::from("An Album")),
+            title: Some(Arc::from("A Track")),
+            ..Song::default()
+        }])));
+        app.screen = Screen::Library;
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Songs"));
+    }
+
+    #[test]
     fn online_cover_replaces_missing_artwork() {
         let mut app = app();
         app.current = Some(Song {

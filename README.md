@@ -59,6 +59,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Configurable keymap (global + per-screen overrides) and theme colors
 - Config hot reload: edits to `config.toml` apply theme and keybindings immediately
 - Opt-in mouse support: wheel scrolling, clickable screen tabs, row selection, double-click to play
+- Configurable layout: cover sidebar toggle/width and library/playlist pane proportions
 
 ## Requirements
 
