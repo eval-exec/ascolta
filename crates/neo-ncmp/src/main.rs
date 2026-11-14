@@ -147,8 +147,19 @@ async fn main() -> Result<()> {
         Some(Command::Remote { action }) => remote(&config, action).await,
         None if cli.check => check(&config).await,
         None => {
+            let mouse = config.ui.mouse;
             let mut terminal = ratatui::init();
+            if mouse
+                && let Err(error) =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
+            {
+                tracing::warn!(%error, "could not enable mouse capture");
+            }
             let result = app::App::run(config, config_path, &mut terminal).await;
+            if mouse {
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+            }
             ratatui::restore();
             result
         }

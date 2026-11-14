@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use futures::StreamExt;
 use neo_ncmp_domain::{
     Album, Artist, DirEntry, EntryKind, Library, MpdOutput, MpdStats, MpdStatus, PlaybackState,
@@ -11,6 +14,7 @@ use neo_ncmp_domain::{
 };
 use neo_ncmp_mpd::{Picture, Playlist, Subsystem};
 use ratatui::DefaultTerminal;
+use ratatui::layout::Rect;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use tokio::sync::{mpsc, watch};
@@ -32,6 +36,39 @@ use crate::tags::TagUpdate;
 use crate::ui;
 use crate::visualizer;
 use crate::widgets::ListView;
+
+/// A rendered list region, used to translate mouse coordinates into rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HitArea {
+    pub rect: Rect,
+    pub offset: usize,
+}
+
+impl HitArea {
+    fn row_at(self, column: u16, row: u16) -> Option<usize> {
+        let inside = column >= self.rect.x
+            && column < self.rect.right()
+            && row >= self.rect.y
+            && row < self.rect.bottom();
+        inside.then(|| self.offset + (row - self.rect.y) as usize)
+    }
+}
+
+/// Where the current frame placed clickable regions.
+#[derive(Debug, Default)]
+pub struct MouseLayout {
+    pub tabs: Vec<(Rect, Screen)>,
+    pub queue: Option<HitArea>,
+    pub library_artists: Option<HitArea>,
+    pub library_albums: Option<HitArea>,
+    pub library_songs: Option<HitArea>,
+    pub playlists: Option<HitArea>,
+    pub playlist_songs: Option<HitArea>,
+    pub outputs: Option<HitArea>,
+    pub history: Option<HitArea>,
+    pub browser: Option<HitArea>,
+    pub tags: Option<HitArea>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -465,6 +502,8 @@ pub struct App {
     cover_requested: Option<Arc<str>>,
     cover_cache: std::collections::HashMap<Arc<str>, Option<Arc<Picture>>>,
     remote_cover_inflight: HashSet<Arc<str>>,
+    pub mouse: MouseLayout,
+    last_click: Option<(Instant, u16, u16)>,
 
     pub connection: ConnectionState,
     pub version: Option<String>,
@@ -538,6 +577,8 @@ impl App {
             cover_requested: None,
             cover_cache: std::collections::HashMap::new(),
             remote_cover_inflight: HashSet::new(),
+            mouse: MouseLayout::default(),
+            last_click: None,
             connection: ConnectionState::Connecting,
             version: None,
             help: false,
@@ -631,6 +672,7 @@ impl App {
                 _ = &mut terminate_signal => break,
                 event = events.next() => match event {
                     Some(Ok(Event::Key(key))) => app.on_key(key),
+                    Some(Ok(Event::Mouse(mouse))) => app.on_mouse(mouse),
                     Some(Ok(Event::Resize(_, _))) => {}
                     Some(Ok(_)) => {}
                     Some(Err(error)) => tracing::warn!(%error, "terminal event error"),
@@ -1068,6 +1110,210 @@ impl App {
         if refresh_queue {
             self.mpd.send(Command::RefreshQueue);
         }
+    }
+
+    fn on_mouse(&mut self, event: MouseEvent) {
+        if !self.config.ui.mouse {
+            return;
+        }
+        let step = match event.kind {
+            MouseEventKind::ScrollDown => 3,
+            MouseEventKind::ScrollUp => -3,
+            _ => 0,
+        };
+        if step != 0 {
+            self.mouse_scroll(step);
+            return;
+        }
+        if event.kind == MouseEventKind::Down(MouseButton::Left) {
+            self.on_mouse_click(event.column, event.row);
+        }
+    }
+
+    fn mouse_scroll(&mut self, step: isize) {
+        if self.search.active {
+            self.search.move_cursor(step);
+            return;
+        }
+        if self.palette.active {
+            self.palette.move_cursor(step);
+            return;
+        }
+        if self.confirm.is_some() || self.input.is_some() || self.help {
+            return;
+        }
+        for _ in 0..step.unsigned_abs() {
+            self.move_selection(step.signum());
+        }
+    }
+
+    fn on_mouse_click(&mut self, column: u16, row: u16) {
+        tracing::debug!(column, row, "mouse click");
+        if self.confirm.is_some() || self.input.is_some() || self.help {
+            return;
+        }
+        if self.search.active || self.palette.active {
+            return;
+        }
+        if let Some(screen) = self
+            .mouse
+            .tabs
+            .iter()
+            .find(|(rect, _)| {
+                column >= rect.x && column < rect.right() && row >= rect.y && row < rect.bottom()
+            })
+            .map(|(_, screen)| *screen)
+        {
+            tracing::debug!(?screen, "mouse tab click");
+            self.set_screen(screen);
+            return;
+        }
+        if !self.mouse_row_click(column, row) {
+            return;
+        }
+
+        let now = Instant::now();
+        let double_click = self
+            .last_click
+            .is_some_and(|(at, click_column, click_row)| {
+                now.duration_since(at) < Duration::from_millis(400)
+                    && click_column == column
+                    && click_row == row
+            });
+        self.last_click = Some((now, column, row));
+        if !double_click {
+            return;
+        }
+        self.last_click = None;
+        let action = match self.screen {
+            Screen::Queue
+            | Screen::Library
+            | Screen::Playlists
+            | Screen::Outputs
+            | Screen::History
+            | Screen::Browser => Action::PlaySelected,
+            Screen::TagEditor => Action::EditTag,
+            Screen::Stats | Screen::Lyrics | Screen::Visualizer => return,
+        };
+        self.handle_action(action);
+    }
+
+    /// Moves the cursor to the clicked row. Returns false when no row was hit.
+    fn mouse_row_click(&mut self, column: u16, row: u16) -> bool {
+        match self.screen {
+            Screen::Queue => {
+                let Some(index) = self.mouse.queue.and_then(|hit| hit.row_at(column, row)) else {
+                    return false;
+                };
+                if index >= self.queue.len() {
+                    return false;
+                }
+                self.queue_view.cursor = index;
+                self.queue_view.clamp(self.queue.len());
+            }
+            Screen::Library => {
+                let panes = [
+                    (self.mouse.library_artists, LibraryPane::Artists),
+                    (self.mouse.library_albums, LibraryPane::Albums),
+                    (self.mouse.library_songs, LibraryPane::Songs),
+                ];
+                let Some((hit, pane)) = panes
+                    .into_iter()
+                    .find(|(hit, _)| hit.is_some_and(|hit| hit.row_at(column, row).is_some()))
+                else {
+                    return false;
+                };
+                let Some(index) = hit.and_then(|hit| hit.row_at(column, row)) else {
+                    return false;
+                };
+                let (count, view) = match pane {
+                    LibraryPane::Artists => {
+                        (self.library_artist_count(), &mut self.library_view.artists)
+                    }
+                    LibraryPane::Albums => {
+                        (self.library_album_count(), &mut self.library_view.albums)
+                    }
+                    LibraryPane::Songs => (self.library_song_count(), &mut self.library_view.songs),
+                };
+                if index >= count {
+                    return false;
+                }
+                self.library_view.pane = pane;
+                view.cursor = index;
+                view.clamp(count);
+            }
+            Screen::Playlists => {
+                let panes = [
+                    (self.mouse.playlists, PlaylistPane::Playlists),
+                    (self.mouse.playlist_songs, PlaylistPane::Songs),
+                ];
+                let Some((hit, pane)) = panes
+                    .into_iter()
+                    .find(|(hit, _)| hit.is_some_and(|hit| hit.row_at(column, row).is_some()))
+                else {
+                    return false;
+                };
+                let Some(index) = hit.and_then(|hit| hit.row_at(column, row)) else {
+                    return false;
+                };
+                let (count, view) = match pane {
+                    PlaylistPane::Playlists => (self.playlists.len(), &mut self.playlists_view),
+                    PlaylistPane::Songs => {
+                        (self.playlist_songs.len(), &mut self.playlist_songs_view)
+                    }
+                };
+                if index >= count {
+                    return false;
+                }
+                self.playlist_pane = pane;
+                view.cursor = index;
+                view.clamp(count);
+            }
+            Screen::Outputs => {
+                let Some(index) = self.mouse.outputs.and_then(|hit| hit.row_at(column, row)) else {
+                    return false;
+                };
+                if index >= self.outputs.len() {
+                    return false;
+                }
+                self.outputs_view.cursor = index;
+                self.outputs_view.clamp(self.outputs.len());
+            }
+            Screen::History => {
+                let Some(index) = self.mouse.history.and_then(|hit| hit.row_at(column, row)) else {
+                    return false;
+                };
+                let count = self
+                    .history
+                    .as_ref()
+                    .map_or(0, |report| report.top_songs.len());
+                if index >= count {
+                    return false;
+                }
+                self.history_cursor = index;
+            }
+            Screen::Browser => {
+                let Some(index) = self.mouse.browser.and_then(|hit| hit.row_at(column, row)) else {
+                    return false;
+                };
+                if index >= self.browser.entries.len() {
+                    return false;
+                }
+                self.browser.view.cursor = index;
+                self.browser.view.clamp(self.browser.entries.len());
+            }
+            Screen::TagEditor => {
+                let Some(index) = self.mouse.tags.and_then(|hit| hit.row_at(column, row)) else {
+                    return false;
+                };
+                if index >= self.tag_editor.fields.len() {
+                    return false;
+                }
+                self.tag_editor.cursor = index;
+            }
+            Screen::Stats | Screen::Lyrics | Screen::Visualizer => return false,
+        }
+        true
     }
 
     fn handle_action(&mut self, action: Action) {
@@ -2539,6 +2785,20 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    fn mouse_event(
+        kind: MouseEventKind,
+        column: u16,
+        row: u16,
+        _modifiers: KeyModifiers,
+    ) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
     fn test_index() -> Arc<SearchIndex> {
         let library = Library::build(vec![
             Song {
@@ -2557,6 +2817,140 @@ mod tests {
             },
         ]);
         Arc::new(SearchIndex::build(&library))
+    }
+
+    fn queue_songs(count: usize) -> Vec<Song> {
+        (0..count)
+            .map(|position| Song {
+                pos: Some(position as u32),
+                id: Some(position as u32 + 1),
+                uri: Arc::from(format!("a/{position}.flac")),
+                ..Song::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mouse_click_selects_and_double_click_plays_a_queue_row() {
+        let (mut app, mut commands) = app_with_commands();
+        app.config.ui.mouse = true;
+        app.screen = Screen::Queue;
+        app.queue = queue_songs(4);
+        app.mouse.queue = Some(HitArea {
+            rect: Rect {
+                x: 0,
+                y: 5,
+                width: 40,
+                height: 4,
+            },
+            offset: 1,
+        });
+        let click = mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            3,
+            7,
+            KeyModifiers::NONE,
+        );
+        app.on_mouse(click);
+        assert_eq!(app.queue_view.cursor, 3);
+        app.on_mouse(click);
+        assert!(matches!(commands.try_recv(), Ok(Command::PlayPos(3))));
+    }
+
+    #[test]
+    fn mouse_clicks_switch_header_tabs_and_the_wheel_scrolls() {
+        let mut app = app();
+        app.config.ui.mouse = true;
+        app.screen = Screen::Queue;
+        app.queue = queue_songs(6);
+        app.mouse.tabs = vec![
+            (
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 10,
+                    height: 1,
+                },
+                Screen::Queue,
+            ),
+            (
+                Rect {
+                    x: 10,
+                    y: 0,
+                    width: 12,
+                    height: 1,
+                },
+                Screen::Library,
+            ),
+        ];
+        app.on_mouse(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            15,
+            0,
+            KeyModifiers::NONE,
+        ));
+        assert_eq!(app.screen, Screen::Library);
+
+        app.screen = Screen::Queue;
+        app.on_mouse(mouse_event(
+            MouseEventKind::ScrollDown,
+            15,
+            0,
+            KeyModifiers::NONE,
+        ));
+        assert_eq!(app.queue_view.cursor, 3);
+        app.on_mouse(mouse_event(
+            MouseEventKind::ScrollUp,
+            15,
+            0,
+            KeyModifiers::NONE,
+        ));
+        assert_eq!(app.queue_view.cursor, 0);
+    }
+
+    #[test]
+    fn mouse_is_ignored_unless_enabled() {
+        let mut app = app();
+        app.screen = Screen::Queue;
+        app.queue = queue_songs(4);
+        app.mouse.queue = Some(HitArea {
+            rect: Rect {
+                x: 0,
+                y: 5,
+                width: 40,
+                height: 4,
+            },
+            offset: 0,
+        });
+        app.on_mouse(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            3,
+            6,
+            KeyModifiers::NONE,
+        ));
+        assert_eq!(app.queue_view.cursor, 0);
+    }
+
+    #[test]
+    fn draw_records_header_and_queue_hit_areas() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        app.queue = queue_songs(3);
+        let backend = TestBackend::new(150, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+
+        assert_eq!(app.mouse.tabs.len(), Screen::ALL.len());
+        assert_eq!(app.mouse.tabs.first().expect("tabs").0.x, 10);
+        assert_eq!(app.mouse.tabs.first().expect("tabs").1, Screen::Queue);
+        assert_eq!(app.mouse.tabs.last().expect("tabs").1, Screen::Browser);
+        let queue = app.mouse.queue.expect("queue hit area");
+        assert_eq!(queue.offset, 0);
+        assert!(queue.rect.height > 0);
     }
 
     #[test]

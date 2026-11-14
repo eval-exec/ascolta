@@ -24,6 +24,10 @@ notifications = false
 # Restore the last screen, cursors, and lyrics offset on start.
 restore_session = true
 
+# Opt in to mouse capture: wheel scrolls, clicking a tab switches screens,
+# clicking a row selects it, and double-clicking activates it.
+mouse = false
+
 [library]
 # Root of MPD's music directory. Required for local .lrc files and tag editing.
 music_directory = "/home/you/Music"

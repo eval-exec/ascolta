@@ -16,7 +16,8 @@ use ratatui_image::{Resize, StatefulImage};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{
-    App, Confirm, ConnectionState, InputModal, LibraryPane, PlaylistPane, Screen, Toast, ToastLevel,
+    App, Confirm, ConnectionState, HitArea, InputModal, LibraryPane, PlaylistPane, Screen, Toast,
+    ToastLevel,
 };
 use crate::search::SearchKind;
 use crate::widgets::{ListView, fit, fit_right};
@@ -128,6 +129,7 @@ fn dim_style() -> Style {
 
 pub fn draw(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
+    app.mouse = crate::app::MouseLayout::default();
     frame.render_widget(Block::default().style(base_style()), area);
 
     if area.height >= 12 {
@@ -176,7 +178,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
     }
 }
 
-fn draw_header(app: &App, frame: &mut Frame, area: Rect) {
+fn draw_header(app: &mut App, frame: &mut Frame, area: Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -193,6 +195,8 @@ fn draw_header(app: &App, frame: &mut Frame, area: Rect) {
             .bg(theme().accent)
             .add_modifier(Modifier::BOLD),
     )];
+    // Tabs start after the " neo-ncmp " badge.
+    let mut tab_x = left.x + UnicodeWidthStr::width(" neo-ncmp ") as u16;
     for screen in Screen::ALL.iter() {
         let number = screen.key_number();
         let label = match screen {
@@ -216,6 +220,20 @@ fn draw_header(app: &App, frame: &mut Frame, area: Rect) {
         } else {
             Style::default().fg(theme().dim)
         };
+        let width = UnicodeWidthStr::width(label.as_str()) as u16;
+        let visible = width.min(left.right().saturating_sub(tab_x));
+        if visible > 0 {
+            app.mouse.tabs.push((
+                Rect {
+                    x: tab_x,
+                    y: area.y,
+                    width: visible,
+                    height: 1,
+                },
+                *screen,
+            ));
+        }
+        tab_x = tab_x.saturating_add(width);
         spans.push(Span::styled(label, style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), left);
@@ -324,6 +342,10 @@ fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
     let cursor = app.queue_view.selected(app.queue.len()).unwrap_or(0);
     let start = app.queue_view.offset;
     let end = (start + viewport).min(app.queue.len());
+    app.mouse.queue = Some(HitArea {
+        rect: list_area,
+        offset: start,
+    });
 
     for (row, index) in (start..end).enumerate() {
         let song = &app.queue[index];
@@ -448,7 +470,7 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
     );
     let pane = app.library_view.pane;
 
-    {
+    let artists_hit = {
         let library = app.library.as_ref().expect("checked above");
         let view = &mut app.library_view.artists;
         render_list_pane(
@@ -465,10 +487,11 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
                     Span::styled(format!("  ({})", artist.song_count()), dim_style()),
                 ])
             },
-        );
-    }
+        )
+    };
+    app.mouse.library_artists = artists_hit;
 
-    {
+    let albums_hit = {
         let library = app.library.as_ref().expect("checked above");
         let artist = library.artists().get(artist_cursor);
         let view = &mut app.library_view.albums;
@@ -491,10 +514,11 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
                 ));
                 Line::from(spans)
             },
-        );
-    }
+        )
+    };
+    app.mouse.library_albums = albums_hit;
 
-    {
+    let songs_hit = {
         let library = app.library.as_ref().expect("checked above");
         let album = library
             .artists()
@@ -519,8 +543,9 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
                 let current = current_uri.as_ref().is_some_and(|uri| song.uri == *uri);
                 song_line(song, width, current, true)
             },
-        );
-    }
+        )
+    };
+    app.mouse.library_songs = songs_hit;
 }
 
 fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -531,7 +556,7 @@ fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
     let selected_name = app.selected_playlist_name();
     let current_uri = app.current.as_ref().map(|song| song.uri.clone());
 
-    {
+    let playlists_hit = {
         let playlists = &app.playlists;
         let view = &mut app.playlists_view;
         render_list_pane(
@@ -552,10 +577,11 @@ fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
                 }
                 Line::from(spans)
             },
-        );
-    }
+        )
+    };
+    app.mouse.playlists = playlists_hit;
 
-    {
+    let songs_hit = {
         let songs = &app.playlist_songs;
         let view = &mut app.playlist_songs_view;
         let title = selected_name
@@ -575,8 +601,9 @@ fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
                 let current = current_uri.as_ref().is_some_and(|uri| song.uri == *uri);
                 song_line(song, width, current, false)
             },
-        );
-    }
+        )
+    };
+    app.mouse.playlist_songs = songs_hit;
 }
 
 fn draw_lyrics(app: &App, frame: &mut Frame, area: Rect) {
@@ -833,6 +860,10 @@ fn draw_tags(app: &mut App, frame: &mut Frame, area: Rect) {
             .saturating_sub(height.saturating_sub(1))
             .min(len.saturating_sub(height));
         let end = (start + height).min(len);
+        app.mouse.tags = Some(HitArea {
+            rect: list_area,
+            offset: start,
+        });
         for (row, index) in (start..end).enumerate() {
             let field = &app.tag_editor.fields[index];
             let selected = index == app.tag_editor.cursor;
@@ -910,6 +941,10 @@ fn draw_browser(app: &mut App, frame: &mut Frame, area: Rect) {
     let cursor = app.browser.view.cursor;
     let start = app.browser.view.offset;
     let end = (start + height).min(app.browser.entries.len());
+    app.mouse.browser = Some(HitArea {
+        rect: inner,
+        offset: start,
+    });
     let width = inner.width as usize;
     let name_width = (width * 2 / 5).max(10);
 
@@ -963,7 +998,7 @@ fn draw_browser(app: &mut App, frame: &mut Frame, area: Rect) {
     }
 }
 
-fn draw_history(app: &App, frame: &mut Frame, area: Rect) {
+fn draw_history(app: &mut App, frame: &mut Frame, area: Rect) {
     let block = pane_block("History", true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1034,6 +1069,10 @@ fn draw_history(app: &App, frame: &mut Frame, area: Rect) {
     ])
     .areas(columns_area);
     render_history_songs(frame, songs_area, report, app.history_cursor);
+    app.mouse.history = Some(HitArea {
+        rect: pane_block("Top Songs", true).inner(songs_area),
+        offset: 0,
+    });
     render_history_column(
         frame,
         artists_area,
@@ -1180,6 +1219,10 @@ fn draw_outputs(app: &mut App, frame: &mut Frame, area: Rect) {
     let cursor = app.outputs_view.cursor;
     let start = app.outputs_view.offset;
     let end = (start + inner.height as usize).min(app.outputs.len());
+    app.mouse.outputs = Some(HitArea {
+        rect: inner,
+        offset: start,
+    });
 
     for (row, index) in (start..end).enumerate() {
         let output = &app.outputs[index];
@@ -1587,7 +1630,8 @@ fn render_list_pane<F>(
     view: &mut ListView,
     active: bool,
     render_item: F,
-) where
+) -> Option<HitArea>
+where
     F: Fn(usize) -> Line<'static>,
 {
     let block = pane_block(title, active);
@@ -1595,7 +1639,7 @@ fn render_list_pane<F>(
     frame.render_widget(block, area);
 
     if inner.height == 0 || inner.width == 0 {
-        return;
+        return None;
     }
     if len == 0 {
         frame.render_widget(
@@ -1604,7 +1648,7 @@ fn render_list_pane<F>(
                 .alignment(Alignment::Center),
             inner,
         );
-        return;
+        return None;
     }
 
     view.ensure_visible(len, inner.height as usize);
@@ -1632,6 +1676,10 @@ fn render_list_pane<F>(
             },
         );
     }
+    Some(HitArea {
+        rect: inner,
+        offset: start,
+    })
 }
 
 fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {

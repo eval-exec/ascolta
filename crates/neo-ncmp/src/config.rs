@@ -53,6 +53,9 @@ pub struct UiConfig {
     pub notifications: bool,
     /// Restore the screen, cursors, and lyrics offset on start.
     pub restore_session: bool,
+    /// Capture mouse events: wheel scrolls, clicking a tab switches screens,
+    /// clicking a row selects it, and double-clicking activates it.
+    pub mouse: bool,
 }
 
 impl Default for UiConfig {
@@ -63,6 +66,7 @@ impl Default for UiConfig {
             follow_now_playing: false,
             notifications: false,
             restore_session: true,
+            mouse: false,
         }
     }
 }
@@ -271,6 +275,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.mpd_addr(), "127.0.0.1:6600");
         assert_eq!(config.ui.tick_rate_ms, 250);
+        assert!(!config.ui.mouse);
         assert!(!config.artwork.online);
     }
 

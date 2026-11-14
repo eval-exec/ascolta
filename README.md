@@ -55,6 +55,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Remote CLI and machine-readable `status --json` for status bars
 - Configurable keymap (global + per-screen overrides) and theme colors
 - Config hot reload: edits to `config.toml` apply theme and keybindings immediately
+- Opt-in mouse support: wheel scrolling, clickable screen tabs, row selection, double-click to play
 
 ## Requirements
 
@@ -125,7 +126,10 @@ Config is layered: defaults → file → CLI flags. Environment overrides:
 `NEO_NCMP_LASTFM_SESSION_KEY`.
 
 Logs: `~/.local/state/neo-ncmp/neo-ncmp.log` (daily rotation, never stdout).
-Set `RUST_LOG=debug` for detail.
+Mouse support is off by default; set `[ui] mouse = true` to enable it. Wheel
+scrolling and clicking rows always work on the focused list; clicking a header
+tab switches screens; double-clicking activates the row (play, open directory,
+toggle output, edit tag). Set `RUST_LOG=debug` for detail.
 
 ## Key bindings
 
@@ -163,6 +167,7 @@ Defaults match ncmpcpp where practical. Every binding is overridable under
 | `a` / `A` (browser) | Enqueue / replace queue and play |
 | `Enter` (outputs) | Toggle output |
 | `Ctrl-A` / `Ctrl-R` (search) | Enqueue all / replace queue with all results |
+| Mouse (opt-in) | Wheel scrolls; click tabs/rows; double-click plays or edits |
 | `R` | Reload state/library (or History/Browser) |
 
 ### Search filters
