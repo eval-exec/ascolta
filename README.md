@@ -8,8 +8,8 @@ MPRIS, scrobbling, and an interactive play history. MPD remains the playback eng
 neo-ncmp is a first-class controller and desktop citizen.
 
 ```
- neo-ncmp  1 Queue (82)  2 Library (5955)  3 Playlists (1)  4 Outputs  5 Stats
-           6 Lyrics  7 Visualizer  8 Tags  9 History                    ● MPD 0.24.0
+ neo-ncmp  1 Queue  2 Library  3 Playlists  4 Outputs  5 Stats  6 Lyrics
+           7 Visualizer  8 Tags  9 History  0 Browser                 ● MPD 0.24.0
 ┌ Queue — 82 songs ──────────────────────────────┐┌ Now Playing ──────────────────┐
 │     # Title                  Artist      Time  ││ ▀▀▄▄▄▄▄▄▄▄▄▄▀▀▀▀▄▄▄▀         │
 │     6 Dissolved Girl         Massive     6:06  ││ ▀▀▀▀▀▀▀▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▄▀▄▄▀  │
@@ -421,7 +421,8 @@ terminal sizes, property-style filter/cell-width tests, tag writing with an
 - The PipeWire visualizer needs `pw-record` and `pw-metadata` from PipeWire; the FIFO mode needs an MPD `fifo` output.
 - Last.fm's browser auth flow is not implemented yet.
 - Tag editing writes tags only; embedded art editing is not exposed yet.
-- MPRIS/notifications are Linux-oriented.
+- MPRIS/notifications are Linux-oriented. MPRIS exposes the player and
+  transport; the TrackList and Playlists interfaces are not implemented yet.
 
 See [ROADMAP.md](ROADMAP.md) for what's next.
 
