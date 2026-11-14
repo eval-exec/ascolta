@@ -15,7 +15,8 @@
           src = pkgs.lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
 
-          nativeBuildInputs = [ pkgs.installShellFiles ];
+          nativeBuildInputs = [ pkgs.installShellFiles pkgs.pkg-config ];
+          buildInputs = [ pkgs.sqlite ];
 
           postInstall = ''
             installManPage docs/neo-ncmp.1

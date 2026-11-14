@@ -176,6 +176,12 @@ async fn main() -> Result<()> {
     }
 
     let cli = Cli::parse();
+    // Completions must work in minimal build sandboxes with no writable HOME.
+    if let Some(Command::Completions { shell }) = &cli.command {
+        let mut command = Cli::command();
+        clap_complete::generate(*shell, &mut command, "neo-ncmp", &mut std::io::stdout());
+        return Ok(());
+    }
     let _log_guard = logging::init()?;
 
     let config_path = cli.config.clone().or_else(config::default_config_path);
@@ -193,11 +199,7 @@ async fn main() -> Result<()> {
         Some(Command::Remote { action }) => remote(&config, action).await,
         Some(Command::Ipc { command, value }) => ipc_request(&config, &command, value).await,
         Some(Command::Scrobble { action }) => scrobble_command(&config, action).await,
-        Some(Command::Completions { shell }) => {
-            let mut command = Cli::command();
-            clap_complete::generate(shell, &mut command, "neo-ncmp", &mut std::io::stdout());
-            Ok(())
-        }
+        Some(Command::Completions { .. }) => unreachable!("handled before logging"),
         Some(Command::LastfmAuth) => lastfm_auth(&config).await,
         None if cli.check => check(&config).await,
         None => {
