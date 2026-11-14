@@ -110,6 +110,7 @@ neo-ncmp scrobble queue          # list pending offline scrobbles
 neo-ncmp scrobble queue --json
 neo-ncmp scrobble retry          # retry all now
 neo-ncmp scrobble forget 0       # drop one entry
+neo-ncmp lastfm-auth             # browser auth -> session key
 neo-ncmp completions bash        # also: zsh, fish, elvish, powershell
 ```
 

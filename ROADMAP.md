@@ -96,4 +96,4 @@ otherwise `ratatui-image` falls back to halfblocks.
 
 **Scrobbling.** Disabled by default. Credentials live in config or environment;
 failed scrobbles are appended to `~/.local/state/neo-ncmp/scrobble-queue.jsonl`
-and retried on startup.
+and retried on startup, from the command palette, or with `neo-ncmp scrobble retry`.
