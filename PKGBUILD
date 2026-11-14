@@ -14,6 +14,9 @@ sha256sums=('SKIP')
 build() {
   cd "$srcdir/$pkgname-$pkgver"
   cargo build --release --locked
+  ./target/release/neo-ncmp completions bash > neo-ncmp.bash
+  ./target/release/neo-ncmp completions zsh > _neo-ncmp
+  ./target/release/neo-ncmp completions fish > neo-ncmp.fish
 }
 
 package() {
@@ -24,4 +27,9 @@ package() {
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 config.example.toml \
     "$pkgdir/usr/share/doc/$pkgname/config.example.toml"
+  install -Dm644 neo-ncmp.bash \
+    "$pkgdir/usr/share/bash-completion/completions/neo-ncmp"
+  install -Dm644 _neo-ncmp "$pkgdir/usr/share/zsh/site-functions/_neo-ncmp"
+  install -Dm644 neo-ncmp.fish \
+    "$pkgdir/usr/share/fish/vendor_completions.d/neo-ncmp.fish"
 }

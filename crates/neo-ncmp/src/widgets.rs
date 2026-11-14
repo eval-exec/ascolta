@@ -79,7 +79,7 @@ impl ListView {
 pub fn fit(text: &str, width: usize) -> String {
     let mut out = String::with_capacity(width);
     let mut used = 0;
-    for character in text.chars() {
+    for character in text.chars().map(display_char) {
         let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
         if used + character_width > width {
             break;
@@ -98,6 +98,7 @@ pub fn fit(text: &str, width: usize) -> String {
 pub fn fit_right(text: &str, width: usize) -> String {
     let text_width = text
         .chars()
+        .map(display_char)
         .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
         .sum::<usize>();
     if text_width >= width {
@@ -107,8 +108,17 @@ pub fn fit_right(text: &str, width: usize) -> String {
     for _ in 0..(width - text_width) {
         out.push(' ');
     }
-    out.push_str(text);
+    out.extend(text.chars().map(display_char));
     out
+}
+
+/// Control characters would move the cursor or alter the line unexpectedly.
+fn display_char(character: char) -> char {
+    if character.is_control() {
+        ' '
+    } else {
+        character
+    }
 }
 
 #[cfg(test)]
@@ -121,7 +131,30 @@ mod tests {
         assert_eq!(fit("abcdef", 3), "abc");
         assert_eq!(fit("界", 1), " ");
         assert_eq!(fit("界", 2), "界");
+        assert_eq!(fit("a\tb", 3), "a b");
         assert_eq!(fit("", 0), "");
+    }
+
+    #[test]
+    fn fit_always_fills_the_requested_cell_width() {
+        for text in [
+            "",
+            "abc",
+            "日本語",
+            "🎵🎶",
+            "e\u{301}",
+            "a\tb",
+            "界a界",
+            "\u{200b}",
+        ] {
+            for width in 0..12 {
+                assert_eq!(
+                    unicode_width::UnicodeWidthStr::width(fit(text, width).as_str()),
+                    width,
+                    "text {text:?} width {width}"
+                );
+            }
+        }
     }
 
     #[test]

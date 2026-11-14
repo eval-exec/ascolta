@@ -109,6 +109,7 @@ neo-ncmp scrobble queue          # list pending offline scrobbles
 neo-ncmp scrobble queue --json
 neo-ncmp scrobble retry          # retry all now
 neo-ncmp scrobble forget 0       # drop one entry
+neo-ncmp completions bash        # also: zsh, fish, elvish, powershell
 ```
 
 The Stats screen also shows pending scrobbles and the command palette offers
@@ -159,7 +160,9 @@ Config is layered: defaults → file → CLI flags. Environment overrides:
 `NEO_NCMP_LASTFM_SESSION_KEY`.
 
 Logs: `~/.local/state/neo-ncmp/neo-ncmp.log` (daily rotation, never stdout).
-Mouse support is off by default; set `[ui] mouse = true` to enable it. Wheel
+Shell completions can be installed for the current session with, for example,
+`source <(neo-ncmp completions bash)`, or written to your shell's completion
+directory. Mouse support is off by default; set `[ui] mouse = true` to enable it. Wheel
 scrolling and clicking rows always work on the focused list; clicking a header
 tab switches screens; double-clicking activates the row (play, open directory,
 toggle output, edit tag). Set `RUST_LOG=debug` for detail.
@@ -401,7 +404,8 @@ just check-mpd  # --check
 Tests cover protocol framing (including binary chunks containing newlines),
 mock-server integration, live MPD, domain grouping/sorting, fuzzy ranking, LRC
 parsing, scrobble payloads and signatures, SQLite aggregation, keymap parsing,
-PCM decoding/FFT bands, UI snapshots via `TestBackend`, tag writing with an
+PCM decoding/FFT bands, every screen rendered through `TestBackend` at three
+terminal sizes, property-style filter/cell-width tests, tag writing with an
 `ffmpeg`-generated fixture (ignored), and LRCLIB fetching (ignored).
 
 ## Limitations

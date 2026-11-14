@@ -17,6 +17,7 @@ neo-ncmp-mpd.workspace = true
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 crossterm = { version = "0.29", features = ["event-stream"] }
 directories = "6"
 futures = "0.3"

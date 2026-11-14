@@ -19,6 +19,10 @@
 
           postInstall = ''
             installManPage docs/neo-ncmp.1
+            installShellCompletion --cmd neo-ncmp \
+              --bash <($out/bin/neo-ncmp completions bash) \
+              --zsh <($out/bin/neo-ncmp completions zsh) \
+              --fish <($out/bin/neo-ncmp completions fish)
             install -Dm644 config.example.toml \
               "$out/share/doc/neo-ncmp/config.example.toml"
             install -Dm644 README.md "$out/share/doc/neo-ncmp/README.md"

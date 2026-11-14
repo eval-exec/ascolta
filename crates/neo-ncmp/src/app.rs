@@ -3626,6 +3626,90 @@ mod tests {
     }
 
     #[test]
+    fn every_screen_renders_at_common_terminal_sizes() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        app.current = Some(Song {
+            uri: Arc::from("a/one.flac"),
+            artist: Some(Arc::from("Portishead")),
+            album: Some(Arc::from("Dummy")),
+            title: Some(Arc::from("Sour Times")),
+            duration: Some(Duration::from_secs(206)),
+            date: Some(Arc::from("1994-08-22")),
+            genre: Some(Arc::from("Trip-Hop")),
+            format: Some(Arc::from("FLAC")),
+            tags: vec![(Arc::from("Comment"), Arc::from("test"))],
+            ..Song::default()
+        });
+        app.queue = queue_songs(40);
+        app.library = Some(Arc::new(Library::build(vec![
+            Song {
+                uri: Arc::from("a/one.flac"),
+                artist: Some(Arc::from("Portishead")),
+                album: Some(Arc::from("Dummy")),
+                title: Some(Arc::from("Sour Times")),
+                ..Song::default()
+            },
+            Song {
+                uri: Arc::from("a/two.flac"),
+                artist: Some(Arc::from("Massive Attack")),
+                album: Some(Arc::from("Mezzanine")),
+                title: Some(Arc::from("Angel")),
+                ..Song::default()
+            },
+        ])));
+        app.playlists = vec![Playlist {
+            name: Arc::from("Late Night"),
+            last_modified: None,
+        }];
+        app.playlist_songs = app.queue.clone();
+        app.outputs = vec![MpdOutput {
+            id: 0,
+            name: Arc::from("PipeWire"),
+            enabled: true,
+        }];
+        app.stats = Some(MpdStats {
+            artists: 944,
+            albums: 1269,
+            songs: 5955,
+            uptime: Duration::from_secs(3600),
+            ..MpdStats::default()
+        });
+        app.browser.entries = vec![
+            DirEntry {
+                kind: EntryKind::Directory,
+                uri: Arc::from("Albums"),
+                name: Arc::from("Albums"),
+                song: None,
+            },
+            DirEntry {
+                kind: EntryKind::File,
+                uri: Arc::from("Albums/One/track.flac"),
+                name: Arc::from("track.flac"),
+                song: app.current.clone(),
+            },
+        ];
+        app.browser.loading = false;
+        if let Some(song) = &app.current {
+            app.tag_editor = TagEditorState::from_song(song);
+        }
+        app.spectrum = vec![0.4; 64];
+        app.config.visualizer.enabled = true;
+
+        for (width, height) in [(80, 24), (120, 40), (200, 60)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            for screen in Screen::ALL {
+                app.screen = screen;
+                terminal
+                    .draw(|frame| crate::ui::draw(&mut app, frame))
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn layout_can_hide_the_cover_sidebar() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;

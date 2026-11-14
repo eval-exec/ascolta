@@ -304,6 +304,31 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_query_text_never_panics() {
+        let alphabet: Vec<char> = "artis:\\\"'- 0129🎵".chars().collect();
+        let mut state = 0x9e37_79b9u32;
+        let values = Values {
+            title: "sour times".into(),
+            artist: "portishead".into(),
+            album: "dummy".into(),
+            year: Some(1994),
+            ..Values::default()
+        };
+        for _ in 0..1_000 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let length = (state as usize) % 24;
+            let mut input = String::new();
+            for _ in 0..length {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                input.push(alphabet[(state as usize) % alphabet.len()]);
+            }
+            let query = Query::parse(&input);
+            let _ = query.matches(&values);
+            let _ = query.fuzzy_terms();
+        }
+    }
+
+    #[test]
     fn a_bad_year_filter_falls_back_to_a_term() {
         let query = Query::parse("year:nineties");
         assert!(query.filters.is_empty());

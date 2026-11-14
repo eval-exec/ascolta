@@ -22,7 +22,7 @@ mod widgets;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use neo_ncmp_domain::{PlaybackState, format_duration};
 use neo_ncmp_mpd::MpdClient;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -88,6 +88,9 @@ enum Command {
         #[command(subcommand)]
         action: ScrobbleAction,
     },
+
+    /// Generate shell completions on stdout.
+    Completions { shell: clap_complete::Shell },
 }
 
 #[derive(Debug, Subcommand)]
@@ -186,6 +189,11 @@ async fn main() -> Result<()> {
         Some(Command::Remote { action }) => remote(&config, action).await,
         Some(Command::Ipc { command, value }) => ipc_request(&config, &command, value).await,
         Some(Command::Scrobble { action }) => scrobble_command(&config, action).await,
+        Some(Command::Completions { shell }) => {
+            let mut command = Cli::command();
+            clap_complete::generate(shell, &mut command, "neo-ncmp", &mut std::io::stdout());
+            Ok(())
+        }
         None if cli.check => check(&config).await,
         None => {
             let mouse = config.ui.mouse;
