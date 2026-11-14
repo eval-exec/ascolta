@@ -41,6 +41,11 @@ channels = 2
 bits = 16
 bars = 64
 
+[artwork]
+# When embedded/folder art is missing, look it up on MusicBrainz and the
+# Cover Art Archive. Results are cached in ~/.cache/neo-ncmp/covers.
+online = false
+
 [search.saved]
 # Named filter queries appear in the command palette as smart playlists.
 # Open one, then Enter a result, Ctrl-A to enqueue all, or Ctrl-R to play all.

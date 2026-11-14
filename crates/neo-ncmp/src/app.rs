@@ -16,6 +16,7 @@ use ratatui_image::protocol::StatefulProtocol;
 use tokio::sync::{mpsc, watch};
 
 use crate::config::Config;
+use crate::coverart;
 use crate::input::{Action, Keymap};
 use crate::lyrics::LyricsDoc;
 use crate::mpd_worker::{self, Command, MpdHandle, Msg, PlayerOption};
@@ -463,6 +464,7 @@ pub struct App {
     picker: Picker,
     cover_requested: Option<Arc<str>>,
     cover_cache: std::collections::HashMap<Arc<str>, Option<Arc<Picture>>>,
+    remote_cover_inflight: HashSet<Arc<str>>,
 
     pub connection: ConnectionState,
     pub version: Option<String>,
@@ -535,6 +537,7 @@ impl App {
             picker,
             cover_requested: None,
             cover_cache: std::collections::HashMap::new(),
+            remote_cover_inflight: HashSet::new(),
             connection: ConnectionState::Connecting,
             version: None,
             help: false,
@@ -878,6 +881,22 @@ impl App {
             }
             Msg::Cover { uri, picture } => {
                 let uri: Arc<str> = Arc::from(uri.as_str());
+                let picture = picture.map(Arc::new);
+                let missing = picture.is_none();
+                if self.cover_cache.len() >= 64 {
+                    self.cover_cache.clear();
+                }
+                self.cover_cache.insert(uri.clone(), picture.clone());
+                if self.current.as_ref().is_some_and(|song| song.uri == uri) {
+                    self.set_cover(picture);
+                }
+                if missing {
+                    self.request_online_cover();
+                }
+            }
+            Msg::OnlineCover { uri, picture } => {
+                let uri: Arc<str> = Arc::from(uri.as_str());
+                self.remote_cover_inflight.remove(&uri);
                 let picture = picture.map(Arc::new);
                 if self.cover_cache.len() >= 64 {
                     self.cover_cache.clear();
@@ -1408,10 +1427,65 @@ impl App {
         self.cover_requested = Some(uri.clone());
         if let Some(cached) = self.cover_cache.get(uri.as_ref()) {
             let cached = cached.clone();
+            let missing = cached.is_none();
             self.set_cover(cached);
+            if missing {
+                self.request_online_cover();
+            }
             return;
         }
         self.mpd.send(Command::FetchCover(uri.to_string()));
+    }
+
+    fn request_online_cover(&mut self) {
+        if !self.config.artwork.online {
+            return;
+        }
+        let Some(song) = self.current.clone() else {
+            return;
+        };
+        if self.remote_cover_inflight.contains(&song.uri) {
+            return;
+        }
+        let artist = song
+            .artist
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                song.album_artist
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or_default()
+            .to_string();
+        let album = song
+            .album
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        let title = song
+            .title
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        if artist.is_empty() && album.is_empty() && title.is_empty() {
+            return;
+        }
+        if self.remote_cover_inflight.len() >= 64 {
+            self.remote_cover_inflight.clear();
+        }
+        self.remote_cover_inflight.insert(song.uri.clone());
+        coverart::spawn(
+            coverart::Request {
+                uri: song.uri.to_string(),
+                artist,
+                album,
+                title,
+            },
+            self.event_tx.clone(),
+        );
     }
 
     fn set_cover(&mut self, picture: Option<Arc<Picture>>) {
@@ -2850,6 +2924,40 @@ mod tests {
         let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
         assert!(text.contains("Now Playing"));
         assert!(text.contains('▀'), "halfblock cover art should be painted");
+    }
+
+    #[test]
+    fn online_cover_replaces_missing_artwork() {
+        let mut app = app();
+        app.current = Some(Song {
+            uri: Arc::from("a/one.flac"),
+            title: Some(Arc::from("A Track")),
+            artist: Some(Arc::from("An Artist")),
+            album: Some(Arc::from("An Album")),
+            ..Song::default()
+        });
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([20, 120, 200]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+
+        app.remote_cover_inflight.insert(Arc::from("a/one.flac"));
+        app.on_msg(Msg::OnlineCover {
+            uri: "a/one.flac".into(),
+            picture: Some(Picture {
+                mime: Arc::from("image/png"),
+                data: bytes.into_inner(),
+            }),
+        });
+
+        assert!(app.remote_cover_inflight.is_empty());
+        assert!(
+            app.cover_cache
+                .get("a/one.flac")
+                .is_some_and(Option::is_some)
+        );
+        assert!(app.cover_protocol.is_some());
     }
 
     #[test]

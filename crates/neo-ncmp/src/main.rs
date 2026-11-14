@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod coverart;
 mod filter;
 mod input;
 mod logging;

@@ -158,6 +158,10 @@ pub enum Msg {
         uri: String,
         picture: Option<Picture>,
     },
+    OnlineCover {
+        uri: String,
+        picture: Option<Picture>,
+    },
     Lyrics {
         uri: String,
         doc: Option<LyricsDoc>,

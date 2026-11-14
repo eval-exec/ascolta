@@ -58,7 +58,7 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 
 ### Integrations
 
-- [ ] Cover Art Archive/MusicBrainz fallback when embedded art is absent
+- [x] Cover Art Archive/MusicBrainz fallback when embedded art is absent, with a disk cache
 - [ ] Last.fm browser-auth flow and `lastfm-auth` helper
 - [ ] Unix-socket IPC for app-specific remote commands
 - [ ] Scrobble editing/queue inspection UI

@@ -45,6 +45,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 **Modern extras**
 
 - Album art in the terminal (Kitty/Sixel/iTerm2/halfblocks) with background fetch and cache
+- Optional Cover Art Archive fallback for tracks without embedded or folder art
 - Synced lyrics from local `.lrc` or LRCLIB, active-line highlight, `[`/`]` offset
 - MPRIS server: media keys, `playerctl`, desktop widgets; released cleanly on exit
 - Desktop notifications on track change
@@ -290,6 +291,11 @@ Embedded art is read via MPD's `readpicture`, with `albumart` as a fallback for
 folder art. Under tmux, Kitty/Sixel passthrough needs `allow-passthrough on`;
 otherwise the halfblock renderer is used automatically.
 
+Set `[artwork] online = true` to fall back to MusicBrainz and the Cover Art
+Archive when both MPD sources come up empty. Lookups run in the background,
+respect MusicBrainz's request spacing, and cache covers in
+`~/.cache/neo-ncmp/covers/`; failed lookups are remembered for a week.
+
 ### Tag editing
 
 Set `[library] music_directory`. The editor requires a confirmation and copies the
@@ -362,7 +368,7 @@ PCM decoding/FFT bands, UI snapshots via `TestBackend`, tag writing with an
 - The library is grouped by **AlbumArtist**; MPD stats count distinct `Artist`
   tags, so counts differ on compilations.
 - The PipeWire visualizer needs `pw-record` and `pw-metadata` from PipeWire; the FIFO mode needs an MPD `fifo` output.
-- Online cover-art lookup and Last.fm's browser auth flow are not implemented yet.
+- Last.fm's browser auth flow is not implemented yet.
 - Tag editing writes tags only; embedded art editing is not exposed yet.
 - MPRIS/notifications are Linux-oriented.
 

@@ -15,6 +15,7 @@ pub struct Config {
     pub scrobbling: ScrobblingConfig,
     pub stats: StatsConfig,
     pub search: SearchConfig,
+    pub artwork: ArtworkConfig,
     /// `[keys.<context>]` tables: key spec -> action name.
     pub keys: HashMap<String, HashMap<String, String>>,
     pub theme: ThemeConfig,
@@ -125,6 +126,13 @@ impl ScrobblingConfig {
             && !self.lastfm_api_secret.is_empty()
             && !self.lastfm_session_key.is_empty()
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ArtworkConfig {
+    /// Fetch missing embedded art from the Cover Art Archive.
+    pub online: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -245,6 +253,10 @@ pub fn default_config_path() -> Option<PathBuf> {
         .map(|dirs| dirs.config_dir().join("config.toml"))
 }
 
+pub fn cache_dir() -> Option<PathBuf> {
+    ProjectDirs::from("dev", "eval-exec", "neo-ncmp").map(|dirs| dirs.cache_dir().to_path_buf())
+}
+
 pub fn state_dir() -> Option<PathBuf> {
     ProjectDirs::from("dev", "eval-exec", "neo-ncmp")
         .and_then(|dirs| dirs.state_dir().map(Path::to_path_buf))
@@ -259,6 +271,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.mpd_addr(), "127.0.0.1:6600");
         assert_eq!(config.ui.tick_rate_ms, 250);
+        assert!(!config.artwork.online);
     }
 
     #[test]
