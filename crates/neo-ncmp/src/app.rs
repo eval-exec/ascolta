@@ -523,6 +523,8 @@ pub struct App {
     cover_requested: Option<Arc<str>>,
     cover_cache: std::collections::HashMap<Arc<str>, Option<Arc<Picture>>>,
     remote_cover_inflight: HashSet<Arc<str>>,
+    mpris_queue: Arc<Vec<Song>>,
+    mpris_playlists: Arc<Vec<(String, Option<String>)>>,
     pub mouse: MouseLayout,
     last_click: Option<(Instant, u16, u16)>,
 
@@ -602,6 +604,8 @@ impl App {
             cover_requested: None,
             cover_cache: std::collections::HashMap::new(),
             remote_cover_inflight: HashSet::new(),
+            mpris_queue: Arc::default(),
+            mpris_playlists: Arc::default(),
             mouse: MouseLayout::default(),
             last_click: None,
             connection: ConnectionState::Connecting,
@@ -930,6 +934,8 @@ impl App {
             Msg::Queue(queue) => {
                 self.queue = queue;
                 self.queue_view.clamp(self.queue.len());
+                self.mpris_queue = Arc::new(self.queue.clone());
+                self.publish_mpris();
             }
             Msg::Library(library) => {
                 let index = Arc::new(SearchIndex::build(&library));
@@ -955,7 +961,19 @@ impl App {
                 playlists.sort_by_key(|playlist| playlist.name.to_lowercase());
                 self.playlists = playlists;
                 self.playlists_view.clamp(self.playlists.len());
+                self.mpris_playlists = Arc::new(
+                    self.playlists
+                        .iter()
+                        .map(|playlist| {
+                            (
+                                playlist.name.to_string(),
+                                playlist.last_modified.as_deref().map(str::to_string),
+                            )
+                        })
+                        .collect(),
+                );
                 self.ensure_playlist_songs();
+                self.publish_mpris();
             }
             Msg::PlaylistSongs { name, songs } => {
                 if self.selected_playlist_name().as_deref() == Some(name.as_str()) {
@@ -1477,6 +1495,9 @@ impl App {
             repeat: self.status.as_ref().is_some_and(|status| status.repeat),
             random: self.status.as_ref().is_some_and(|status| status.random),
             single: self.status.as_ref().is_some_and(|status| status.single),
+            song_pos: self.status.as_ref().and_then(|status| status.song_pos),
+            queue: self.mpris_queue.clone(),
+            playlists: self.mpris_playlists.clone(),
         };
         let _ = self.mpris_tx.send(snapshot);
     }

@@ -48,7 +48,7 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Album art in the terminal (Kitty/Sixel/iTerm2/halfblocks) with background fetch and cache
 - Optional Cover Art Archive fallback for tracks without embedded or folder art
 - Synced lyrics from local `.lrc` or LRCLIB, active-line highlight, `[`/`]` offset
-- MPRIS server: media keys, `playerctl`, desktop widgets; released cleanly on exit
+- MPRIS server: media keys, `playerctl`, desktop widgets, TrackList and Playlists interfaces; released cleanly on exit
 - Desktop notifications on track change
 - ListenBrainz and Last.fm scrobbling with an inspectable offline queue, manual retry, and entry removal
 - Last.fm browser auth helper (`neo-ncmp lastfm-auth`) that prints a session key
@@ -422,8 +422,9 @@ terminal sizes, property-style filter/cell-width tests, tag writing with an
 - The PipeWire visualizer needs `pw-record` and `pw-metadata` from PipeWire; the FIFO mode needs an MPD `fifo` output.
 - Last.fm's browser auth flow is not implemented yet.
 - Tag editing writes tags only; embedded art editing is not exposed yet.
-- MPRIS/notifications are Linux-oriented. MPRIS exposes the player and
-  transport; the TrackList and Playlists interfaces are not implemented yet.
+- MPRIS/notifications are Linux-oriented. TrackList exposes a 21-track window
+  around the current song (as recommended for large queues) rather than the
+  whole queue.
 
 See [ROADMAP.md](ROADMAP.md) for what's next.
 
