@@ -112,6 +112,14 @@ cargo build --release
 ./target/release/ascolta
 ```
 
+### cargo-binstall
+
+Prebuilt Linux archives are supported:
+
+```sh
+cargo binstall ascolta
+```
+
 ### Nix
 
 ```sh
