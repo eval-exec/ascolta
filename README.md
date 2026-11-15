@@ -264,7 +264,7 @@ Legacy `NEO_NCMP_*` variables are still accepted.
 ~/.cache/ascolta/artists/              Deezer artist portrait cache
 ```
 
-Existing `neo-ncmp` config, state, and cache directories are moved to the
+Existing `neo-ncmp` config, state, and cache directories are migrated to the
 `ascolta` paths automatically on first launch.
 
 ## Integrations
