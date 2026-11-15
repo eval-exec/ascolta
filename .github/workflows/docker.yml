@@ -74,7 +74,7 @@ jobs:
       - name: Read workspace version
         id: version
         run: |
-          version=$(sed -n 's/^version = "\\(.*\\)"/\\1/p' Cargo.toml | head -n 1)
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Image metadata
