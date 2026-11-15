@@ -15,5 +15,5 @@ services:
       - ~/.local/state/ascolta:/state/ascolta
       - ~/.cache/ascolta:/cache/ascolta
       - ~/Music:/music:ro
-    # If the host UID is not 1000, uncomment and adjust:
-    # user: "1000:1000"
+    # Export DOCKER_UID/DOCKER_GID (from `id -u`/`id -g`) if they are not 1000.
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"

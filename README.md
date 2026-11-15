@@ -161,10 +161,11 @@ docker run --rm -it --init --network host \
   ghcr.io/eval-exec/ascolta:latest
 ```
 
-The container runs as UID 1000 and stores everything under `/config`, `/state`,
-and `/cache` (the XDG directories are redirected there). Create the bind-mount
-directories first so they are owned by your user. Images are tagged
-`latest`, `X.Y.Z`, and `X.Y`.
+The container runs as UID/GID 1000 by default and stores everything under
+`/config`, `/state`, and `/cache` (the XDG directories are redirected there).
+Create the bind-mount directories first. If your host UID is not 1000, add
+`--user "$(id -u):$(id -g)"` so the container can write to them. Images are
+tagged `latest`, `X.Y.Z`, and `X.Y`.
 
 `--network host` lets Ascolta reach MPD and the library at `127.0.0.1`. Use this
 config inside the container:
