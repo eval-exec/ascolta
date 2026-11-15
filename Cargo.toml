@@ -3,15 +3,15 @@ resolver = "3"
 members = ["crates/ascolta", "crates/ascolta-domain", "crates/ascolta-mpd"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/eval-exec/ascolta"
 
 [workspace.dependencies]
-ascolta-domain = { path = "crates/ascolta-domain" }
-ascolta-mpd = { path = "crates/ascolta-mpd" }
+ascolta-domain = { path = "crates/ascolta-domain", version = "0.0.1" }
+ascolta-mpd = { path = "crates/ascolta-mpd", version = "0.0.1" }
 
 tokio = { version = "1", features = [
     "rt-multi-thread",

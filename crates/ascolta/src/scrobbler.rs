@@ -18,7 +18,11 @@ use ascolta_domain::Song;
 
 const LISTENBRAINZ_URL: &str = "https://api.listenbrainz.org/1/submit-listens";
 const LASTFM_URL: &str = "https://ws.audioscrobbler.com/2.0/";
-const USER_AGENT: &str = "ascolta/0.1.0 (https://github.com/eval-exec/ascolta)";
+const USER_AGENT: &str = concat!(
+    "ascolta/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/eval-exec/ascolta)"
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScrobbleKind {

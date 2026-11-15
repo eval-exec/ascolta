@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "ascolta"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "ascolta-domain",
@@ -185,11 +185,11 @@ dependencies = [
 
 [[package]]
 name = "ascolta-domain"
-version = "0.1.0"
+version = "0.0.1"
 
 [[package]]
 name = "ascolta-mpd"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "ascolta-domain",
  "thiserror 2.0.21",

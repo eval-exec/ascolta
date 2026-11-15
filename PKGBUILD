@@ -1,6 +1,6 @@
 # Maintainer: ascolta contributors
 pkgname=ascolta
-pkgver=0.1.0
+pkgver=0.0.1
 pkgrel=1
 pkgdesc="A modern, feature-rich terminal client for MPD"
 arch=('x86_64' 'aarch64')

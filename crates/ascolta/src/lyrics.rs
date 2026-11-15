@@ -97,7 +97,11 @@ async fn lrclib_lyrics(request: LyricsRequest<'_>) -> Option<LyricsDoc> {
     }
 
     let client = reqwest::Client::builder()
-        .user_agent("ascolta/0.1.0 (https://github.com/eval-exec/ascolta)")
+        .user_agent(concat!(
+            "ascolta/",
+            env!("CARGO_PKG_VERSION"),
+            " (https://github.com/eval-exec/ascolta)"
+        ))
         .timeout(Duration::from_secs(8))
         .build()
         .ok()?;
