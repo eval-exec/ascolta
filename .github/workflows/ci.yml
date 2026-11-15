@@ -72,4 +72,4 @@ jobs:
         env:
           MPD_HOST: 127.0.0.1
           MPD_PORT: 6601
-        run: cargo test -p neo-ncmp-mpd --test live -- --ignored --nocapture
+        run: cargo test -p ascolta-mpd --test live -- --ignored --nocapture

@@ -31,9 +31,9 @@ jobs:
 
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          bin: neo-ncmp
+          bin: ascolta
           target: ${{ matrix.target }}
-          archive: neo-ncmp-$tag-$target
-          include: README.md,LICENSE,docs/neo-ncmp.1,config.example.toml
+          archive: ascolta-$tag-$target
+          include: README.md,LICENSE,docs/ascolta.1,config.example.toml
           use-cross: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,5 +1,5 @@
 {
-  description = "neo-ncmp — a modern, feature-rich terminal client for MPD";
+  description = "ascolta — a modern, feature-rich terminal client for MPD";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -10,7 +10,7 @@
     in {
       packages = forAllSystems (pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
-          pname = "neo-ncmp";
+          pname = "ascolta";
           version = "0.1.0";
           src = pkgs.lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
@@ -19,21 +19,21 @@
           buildInputs = [ pkgs.sqlite ];
 
           postInstall = ''
-            installManPage docs/neo-ncmp.1
-            installShellCompletion --cmd neo-ncmp \
-              --bash <($out/bin/neo-ncmp completions bash) \
-              --zsh <($out/bin/neo-ncmp completions zsh) \
-              --fish <($out/bin/neo-ncmp completions fish)
+            installManPage docs/ascolta.1
+            installShellCompletion --cmd ascolta \
+              --bash <($out/bin/ascolta completions bash) \
+              --zsh <($out/bin/ascolta completions zsh) \
+              --fish <($out/bin/ascolta completions fish)
             install -Dm644 config.example.toml \
-              "$out/share/doc/neo-ncmp/config.example.toml"
-            install -Dm644 README.md "$out/share/doc/neo-ncmp/README.md"
+              "$out/share/doc/ascolta/config.example.toml"
+            install -Dm644 README.md "$out/share/doc/ascolta/README.md"
           '';
 
           meta = with pkgs.lib; {
             description = "A modern, feature-rich terminal client for MPD";
-            homepage = "https://github.com/eval-exec/neo-ncmp";
+            homepage = "https://github.com/eval-exec/ascolta";
             license = licenses.mit;
-            mainProgram = "neo-ncmp";
+            mainProgram = "ascolta";
             platforms = platforms.linux;
           };
         };

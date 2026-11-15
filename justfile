@@ -15,16 +15,16 @@ test:
     cargo test --workspace --doc
 
 live-test:
-    cargo test -p neo-ncmp-mpd --test live -- --ignored --nocapture
+    cargo test -p ascolta-mpd --test live -- --ignored --nocapture
 
 run:
-    cargo run -p neo-ncmp
+    cargo run -p ascolta
 
 run-release:
-    cargo run --release -p neo-ncmp
+    cargo run --release -p ascolta
 
 release:
-    cargo build --release -p neo-ncmp
+    cargo build --release -p ascolta
 
 check-mpd:
-    cargo run -q -p neo-ncmp -- --check
+    cargo run -q -p ascolta -- --check

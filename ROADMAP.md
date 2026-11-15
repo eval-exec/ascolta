@@ -1,6 +1,6 @@
 # Roadmap
 
-MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
+MPD owns playback; ascolta is a controller, library UI, and desktop citizen.
 
 ## Done
 
@@ -62,7 +62,7 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 
 - [x] Cover Art Archive/MusicBrainz fallback when embedded art is absent, with a disk cache
 - [x] Last.fm browser-auth flow and `lastfm-auth` helper
-- [x] Unix-socket IPC for app-specific remote commands, plus `neo-ncmp ipc`
+- [x] Unix-socket IPC for app-specific remote commands, plus `ascolta ipc`
 - [x] Scrobble queue inspection, retry, and entry removal (Stats, palette, CLI)
 - [x] Multi-partition support: list/switch via CLI, IPC, and status display
 
@@ -84,11 +84,11 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 ## Design notes
 
 **Tag editing is destructive.** Every write first copies the original file to
-`~/.local/state/neo-ncmp/tag-backups/`. If the copy fails, the write is aborted.
+`~/.local/state/ascolta/tag-backups/`. If the copy fails, the write is aborted.
 Batch editing and an undo journal are future work.
 
 **Visualizer.** MPD's `fifo` output is the classic ncmpcpp approach but requires
-editing `mpd.conf` (on NixOS, the Nix module). `neo-ncmp` opens the FIFO at
+editing `mpd.conf` (on NixOS, the Nix module). `ascolta` opens the FIFO at
 startup so MPD's output does not block. The `pipewire` source is the zero-config
 alternative: it resolves the default sink with `pw-metadata` and captures its
 monitor via `pw-record`, so other applications on the sink show up too. Set
@@ -98,5 +98,5 @@ monitor via `pw-record`, so other applications on the sink show up too. Set
 otherwise `ratatui-image` falls back to halfblocks.
 
 **Scrobbling.** Disabled by default. Credentials live in config or environment;
-failed scrobbles are appended to `~/.local/state/neo-ncmp/scrobble-queue.jsonl`
-and retried on startup, from the command palette, or with `neo-ncmp scrobble retry`.
+failed scrobbles are appended to `~/.local/state/ascolta/scrobble-queue.jsonl`
+and retried on startup, from the command palette, or with `ascolta scrobble retry`.

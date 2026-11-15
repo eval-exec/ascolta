@@ -148,6 +148,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "ascolta"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ascolta-domain",
+ "ascolta-mpd",
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "directories",
+ "futures",
+ "image",
+ "insta",
+ "libc",
+ "lofty",
+ "md-5",
+ "mpris-server",
+ "notify",
+ "notify-rust",
+ "nucleo-matcher",
+ "ratatui",
+ "ratatui-image",
+ "realfft",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "unicode-width",
+]
+
+[[package]]
+name = "ascolta-domain"
+version = "0.1.0"
+
+[[package]]
+name = "ascolta-mpd"
+version = "0.1.0"
+dependencies = [
+ "ascolta-domain",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2117,56 +2167,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "target-features",
-]
-
-[[package]]
-name = "neo-ncmp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "clap_complete",
- "crossterm",
- "directories",
- "futures",
- "image",
- "insta",
- "libc",
- "lofty",
- "md-5",
- "mpris-server",
- "neo-ncmp-domain",
- "neo-ncmp-mpd",
- "notify",
- "notify-rust",
- "nucleo-matcher",
- "ratatui",
- "ratatui-image",
- "realfft",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "unicode-width",
-]
-
-[[package]]
-name = "neo-ncmp-domain"
-version = "0.1.0"
-
-[[package]]
-name = "neo-ncmp-mpd"
-version = "0.1.0"
-dependencies = [
- "neo-ncmp-domain",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
 ]
 
 [[package]]

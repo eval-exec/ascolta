@@ -1,4 +1,4 @@
-# Copy to ~/.config/neo-ncmp/config.toml
+# Copy to ~/.config/ascolta/config.toml
 
 [mpd]
 host = "127.0.0.1"
@@ -62,11 +62,11 @@ bars = 64
 
 [artwork]
 # When embedded/folder art is missing, look it up on MusicBrainz and the
-# Cover Art Archive. Results are cached in ~/.cache/neo-ncmp/covers.
+# Cover Art Archive. Results are cached in ~/.cache/ascolta/covers.
 online = false
 
 # Fetch artist portraits for artist rows from Deezer (no API key required).
-# Results are cached in ~/.cache/neo-ncmp/artists.
+# Results are cached in ~/.cache/ascolta/artists.
 artist_images = true
 
 [search.saved]
@@ -79,12 +79,12 @@ artist_images = true
 # Per-user Unix socket for app-specific commands (mode 0600). Use `path` if
 # the default runtime-directory path is unsuitable.
 enabled = true
-# path = "/run/user/1000/neo-ncmp/socket"
+# path = "/run/user/1000/ascolta/socket"
 
 [scrobbling]
 # Disabled by default. Tokens can also come from environment variables:
-# NEO_NCMP_LISTENBRAINZ_TOKEN, NEO_NCMP_LASTFM_API_KEY,
-# NEO_NCMP_LASTFM_API_SECRET, NEO_NCMP_LASTFM_SESSION_KEY
+# ASCOLTA_LISTENBRAINZ_TOKEN, ASCOLTA_LASTFM_API_KEY,
+# ASCOLTA_LASTFM_API_SECRET, ASCOLTA_LASTFM_SESSION_KEY
 enabled = false
 listenbrainz_token = ""
 lastfm_api_key = ""
@@ -92,7 +92,7 @@ lastfm_api_secret = ""
 lastfm_session_key = ""
 
 [stats]
-# Record plays into ~/.local/state/neo-ncmp/neo-ncmp.db (History screen).
+# Record plays into ~/.local/state/ascolta/ascolta.db (History screen).
 enabled = true
 
 # Key overrides. Sections are `global`, `queue`, `library`, `playlists`,

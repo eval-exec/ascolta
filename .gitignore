@@ -1,3 +1,6 @@
 /target
 *.log
 .directory
+
+# README screenshot lives as a GitHub release asset, not in git.
+/assets/

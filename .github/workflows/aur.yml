@@ -32,7 +32,7 @@ jobs:
         if: env.AUR_SSH_PRIVATE_KEY != ''
         uses: KSXGitHub/github-actions-deploy-aur@v3
         with:
-          pkgname: neo-ncmp
+          pkgname: ascolta
           pkgbuild: ./PKGBUILD
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
