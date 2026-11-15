@@ -58,6 +58,8 @@ pub struct UiConfig {
     /// Capture mouse events: wheel scrolls, clicking a tab switches screens,
     /// clicking a row selects it, and double-clicking activates it.
     pub mouse: bool,
+    /// Fetch lyrics for the current song so the Now Playing card can show them.
+    pub lyrics_in_card: bool,
 }
 
 impl Default for UiConfig {
@@ -69,6 +71,7 @@ impl Default for UiConfig {
             notifications: false,
             restore_session: true,
             mouse: false,
+            lyrics_in_card: true,
         }
     }
 }
@@ -137,9 +140,6 @@ impl ScrobblingConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct LayoutConfig {
-    /// Show the Now Playing sidebar on the queue screen.
-    pub cover_sidebar: bool,
-    pub cover_width: u16,
     /// Library pane percentages; each pane needs at least a few columns.
     pub artists_width: u16,
     pub albums_width: u16,
@@ -151,8 +151,6 @@ pub struct LayoutConfig {
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
-            cover_sidebar: true,
-            cover_width: 40,
             artists_width: 30,
             albums_width: 32,
             songs_width: 38,
@@ -338,6 +336,7 @@ mod tests {
         assert_eq!(config.mpd_addr(), "127.0.0.1:6600");
         assert_eq!(config.ui.tick_rate_ms, 250);
         assert!(!config.ui.mouse);
+        assert!(config.ui.lyrics_in_card);
         assert!(!config.artwork.online);
     }
 
@@ -352,6 +351,8 @@ mod tests {
             [ui]
             tick_rate_ms = 100
             start_screen = "library"
+            mouse = true
+            lyrics_in_card = false
 
             [library]
             music_directory = "/home/me/Music"
@@ -379,8 +380,6 @@ mod tests {
             path = "/tmp/neo-ncmp-test.sock"
 
             [layout]
-            cover_sidebar = false
-            cover_width = 32
             artists_width = 25
             albums_width = 35
             songs_width = 40
@@ -408,8 +407,8 @@ mod tests {
             config.ipc.socket_path(),
             std::path::PathBuf::from("/tmp/neo-ncmp-test.sock")
         );
-        assert!(!config.layout.cover_sidebar);
-        assert_eq!(config.layout.cover_width, 32);
+        assert!(config.ui.mouse);
+        assert!(!config.ui.lyrics_in_card);
         assert_eq!(config.layout.songs_width, 40);
         assert!(config.scrobbling.listenbrainz_enabled());
         assert!(!config.scrobbling.lastfm_enabled());

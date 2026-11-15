@@ -9,16 +9,21 @@ neo-ncmp is a first-class controller and desktop citizen.
 
 ```
  neo-ncmp  1 Queue  2 Library  3 Playlists  4 Outputs  5 Stats  6 Lyrics
-           7 Visualizer  8 Tags  9 History  0 Browser                 ● MPD 0.24.0
-┌ Queue — 82 songs ──────────────────────────────┐┌ Now Playing ──────────────────┐
-│     # Title                  Artist      Time  ││ ▀▀▄▄▄▄▄▄▄▄▄▄▀▀▀▀▄▄▄▀         │
-│     6 Dissolved Girl         Massive     6:06  ││ ▀▀▀▀▀▀▀▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▄▀▄▄▀  │
-│▶    3 A Thousand Years       Unknown     3:04  ││ ▀▀▀▀▀▀▀▀▀▀▄▀▀▄▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
-└────────────────────────────────────────────────┘│ Massive Attack — Dissolved…  │
-                                                  └───────────────────────────────┘
-                                      0:00 / 3:04
-■ Unknown Artist — A Thousand Years
- vol 100% rep● rnd○ sgl○ cns○           ? help  : palette  / search  q quit
+           7 Visualizer  8 Tags  9 History  0 Browser                ● MPD 0.24.0
+┌ Queue — 82 songs ───────────────────────────────────────────────────┐
+│     # Title                     Artist               Album     Time │
+│     6 Dissolved Girl            Massive Attack       Mezzanine 6:06 │
+│▶    3 A Thousand Years          Unknown Artist       Unknown   3:04 │
+│     ...                                                             │
+└─────────────────────────────────────────────────────────────────────┘
+┌ Now Playing ────────────────────────────────────────────────────────┐
+│ ▀▀▄▄▄▄▄▄▄▄  ▶ Dissolved Girl                                       │
+│ ▀▀▀▀▀▀▀▀▀▀  Massive Attack · Mezzanine                             │
+│ ▀▀▀▀▀▀▀▀▀▀  48000 Hz / 16 bit / stereo · 128 kbps                  │
+│ ▀▀▀▀▀▀▀▀▀▀  █████████████░░░░░░  2:04 / 6:06                       │
+│             ♪ And I'm still falling…                                │
+└─────────────────────────────────────────────────────────────────────┘
+ vol 100% rep● rnd○ sgl○ cns○         ? help  : palette  / search  q quit
 ```
 
 ## Features
@@ -45,9 +50,9 @@ neo-ncmp is a first-class controller and desktop citizen.
 
 **Modern extras**
 
-- Album art in the terminal (Kitty/Sixel/iTerm2/halfblocks) with background fetch and cache
+- Album art in the terminal (Kitty/Sixel/iTerm2/halfblocks) with background fetch and cache, shown in the bottom Now Playing card
 - Optional Cover Art Archive fallback for tracks without embedded or folder art
-- Synced lyrics from local `.lrc` or LRCLIB, active-line highlight, `[`/`]` offset
+- Synced lyrics from local `.lrc` or LRCLIB, active-line highlight in the Lyrics screen and Now Playing card, `[`/`]` offset
 - MPRIS server: media keys, `playerctl`, desktop widgets, TrackList and Playlists interfaces; released cleanly on exit
 - Desktop notifications on track change
 - ListenBrainz and Last.fm scrobbling with an inspectable offline queue, manual retry, and entry removal
@@ -55,12 +60,14 @@ neo-ncmp is a first-class controller and desktop citizen.
 - Real-time spectrum visualizer from an MPD FIFO output or PipeWire monitor capture
 - Tag editor with full-file backups and confirmation before writing
 - Remote CLI and machine-readable `status --json` for status bars
+- Crossfade control from the palette, `remote crossfade`, and IPC
 - Unix-socket IPC for app-specific control (switch screens, open searches, inspect state)
 - MPD partitions: list and switch from the CLI, IPC, or `remote`
 - Configurable keymap (global + per-screen overrides) and theme colors
 - Config hot reload: edits to `config.toml` apply theme and keybindings immediately
 - Opt-in mouse support: wheel scrolling, clickable screen tabs, row selection, double-click to play
-- Configurable layout: cover sidebar toggle/width and library/playlist pane proportions
+- Configurable layout: library and playlist pane proportions
+- Now Playing card: cover art, metadata, progress, and the active lyric line
 
 ## Requirements
 
@@ -99,6 +106,8 @@ neo-ncmp remote repeat toggle  # on | off | toggle
 neo-ncmp remote random on
 neo-ncmp remote single toggle
 neo-ncmp remote consume off
+neo-ncmp remote crossfade         # print current seconds
+neo-ncmp remote crossfade 5       # enable a 5-second crossfade
 neo-ncmp remote shuffle
 neo-ncmp remote clear
 neo-ncmp remote playlist "Late Night"
@@ -128,6 +137,7 @@ neo-ncmp ipc screen library         # queue, library, playlists, outputs, stats,
 neo-ncmp ipc action next_track      # any keymap action name
 neo-ncmp ipc search "artist:portishead year:>=1990"
 neo-ncmp ipc volume 65
+neo-ncmp ipc crossfade 5
 neo-ncmp ipc seek 42.5
 neo-ncmp ipc playlist "Late Night"  # replace queue and play
 neo-ncmp ipc partition "headphones" # switch MPD partition

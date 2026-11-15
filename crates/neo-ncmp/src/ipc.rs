@@ -97,6 +97,13 @@ fn dispatch(request: Request, app: &mut App) -> Value {
             app.ipc_notify(message);
             Value::Null
         }),
+        "crossfade" => number_value(request.value).and_then(|seconds| {
+            if !(0.0..=3600.0).contains(&seconds) {
+                return Err("crossfade must be between 0 and 3600 seconds".into());
+            }
+            app.ipc_crossfade(seconds.round() as u32)?;
+            Ok(Value::Null)
+        }),
         "volume" => number_value(request.value).and_then(|volume| {
             if !(0.0..=100.0).contains(&volume) {
                 return Err("volume must be between 0 and 100".into());

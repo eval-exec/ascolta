@@ -142,6 +142,10 @@ enum RemoteAction {
     Consume {
         value: String,
     },
+    /// Print the current crossfade seconds, or set it when a value is given.
+    Crossfade {
+        seconds: Option<u32>,
+    },
     Shuffle,
     Clear,
     /// Replace the queue with a stored playlist and play it.
@@ -355,6 +359,7 @@ async fn print_status(config: &config::Config, json: bool) -> Result<()> {
             "random": status.random,
             "single": status.single,
             "consume": status.consume,
+            "crossfade": status.crossfade,
             "partition": status.partition.as_deref(),
         });
         println!("{}", serde_json::to_string(&value)?);
@@ -440,6 +445,10 @@ async fn remote(config: &config::Config, action: RemoteAction) -> Result<()> {
                 .set_consume(parse_switch(&value, status.consume)?)
                 .await?;
         }
+        RemoteAction::Crossfade { seconds } => match seconds {
+            Some(seconds) => client.set_crossfade(seconds).await?,
+            None => println!("{}", client.status().await?.crossfade.unwrap_or(0)),
+        },
         RemoteAction::Shuffle => client.shuffle().await?,
         RemoteAction::Clear => client.clear().await?,
         RemoteAction::Playlist { name } => {

@@ -135,7 +135,8 @@ pub fn status(response: &Response) -> MpdStatus {
             "random" => status.random = value == "1",
             "single" => status.single = value == "1",
             "consume" => status.consume = value == "1",
-            "crossfade" => status.crossfade = value.parse().ok(),
+            // MPD calls this `xfade` in status responses; accept both spellings.
+            "crossfade" | "xfade" => status.crossfade = value.parse().ok(),
             "partition" => status.partition = Some(Arc::from(value.as_str())),
             "playlist" => status.playlist_version = value.parse().ok(),
             "playlistlength" => status.playlist_length = value.parse().unwrap_or(0),
@@ -329,6 +330,7 @@ mod tests {
             ("duration", "366.893"),
             ("bitrate", "128"),
             ("audio", "48000:16:2"),
+            ("xfade", "5"),
         ]);
         let status = status(&response);
         assert_eq!(status.volume, Some(87));
@@ -349,6 +351,7 @@ mod tests {
                 channels: 2
             })
         );
+        assert_eq!(status.crossfade, Some(5));
         assert_eq!(status.progress(), Some(112_008.0 / 366_893.0));
     }
 

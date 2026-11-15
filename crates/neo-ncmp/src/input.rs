@@ -35,6 +35,7 @@ pub enum Action {
     ToggleRandom,
     ToggleSingle,
     ToggleConsume,
+    CrossfadePrompt,
 
     PlaySelected,
     EnqueueSelected,
@@ -383,6 +384,7 @@ pub(crate) fn parse_action(spec: &str) -> Result<Action, String> {
         "toggle_random" | "random" => Action::ToggleRandom,
         "toggle_single" | "single" => Action::ToggleSingle,
         "toggle_consume" | "consume" => Action::ToggleConsume,
+        "crossfade" | "set_crossfade" => Action::CrossfadePrompt,
         "play_selected" | "play" => Action::PlaySelected,
         "enqueue" | "append" => Action::EnqueueSelected,
         "replace_and_play" | "replace" => Action::ReplaceAndPlay,
@@ -606,6 +608,7 @@ mod tests {
             parse_action("retry_scrobbles").unwrap(),
             Action::RetryScrobbles
         );
+        assert_eq!(parse_action("crossfade").unwrap(), Action::CrossfadePrompt);
         assert!(parse_action("dance").is_err());
     }
 }

@@ -132,24 +132,33 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
     app.mouse = crate::app::MouseLayout::default();
     frame.render_widget(Block::default().style(base_style()), area);
 
-    if area.height >= 12 {
-        let [header, main, progress, now, footer] = Layout::vertical([
+    let card_height = (area.height / 4).clamp(6, 11);
+    if area.height >= card_height.saturating_add(8) {
+        let [header, main, card, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(card_height),
             Constraint::Length(1),
         ])
         .areas(area);
         draw_header(app, frame, header);
         draw_main(app, frame, main);
-        draw_progress(app, frame, progress);
-        draw_now_playing(app, frame, now);
+        draw_now_playing_card(app, frame, card);
+        draw_footer(app, frame, footer);
+    } else if area.height >= 12 {
+        let [header, main, footer] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+        draw_header(app, frame, header);
+        draw_main(app, frame, main);
         draw_footer(app, frame, footer);
     } else {
         let [header, main, footer] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Min(3),
+            Constraint::Min(2),
             Constraint::Length(1),
         ])
         .areas(area);
@@ -302,17 +311,6 @@ fn pane_block(title: &str, active: bool) -> Block<'static> {
 }
 
 fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
-    let layout = &app.config.layout;
-    let with_cover = layout.cover_sidebar && area.width >= layout.cover_width.saturating_add(40);
-    let (queue_area, cover_area) = if with_cover {
-        let [queue_area, cover_area] =
-            Layout::horizontal([Constraint::Min(40), Constraint::Length(layout.cover_width)])
-                .areas(area);
-        (queue_area, Some(cover_area))
-    } else {
-        (area, None)
-    };
-
     let block = pane_block(
         &format!(
             "Queue — {} song{}",
@@ -321,11 +319,8 @@ fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
         ),
         true,
     );
-    let inner = block.inner(queue_area);
-    frame.render_widget(block, queue_area);
-    if let Some(cover_area) = cover_area {
-        draw_cover(app, frame, cover_area);
-    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
     if inner.height == 0 || inner.width == 0 {
         return;
@@ -376,79 +371,158 @@ fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
     }
 }
 
-fn draw_cover(app: &mut App, frame: &mut Frame, area: Rect) {
-    let block = pane_block("Now Playing", false);
+fn draw_cover_art(app: &mut App, frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if let Some(protocol) = app.cover_protocol.as_mut() {
+        frame.render_stateful_widget(
+            StatefulImage::new().resize(Resize::Fit(None)),
+            area,
+            protocol,
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new("♪\n\nno cover art")
+                .alignment(Alignment::Center)
+                .style(dim_style()),
+            area,
+        );
+    }
+}
+
+fn draw_now_playing_card(app: &mut App, frame: &mut Frame, area: Rect) {
+    let block = pane_block("Now Playing", true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.height < 4 || inner.width < 4 {
+    if inner.height == 0 || inner.width == 0 {
         return;
     }
 
-    let info_height = 6.min(inner.height.saturating_sub(1));
-    let art_height = inner.height.saturating_sub(info_height);
-    if art_height > 0 {
-        let art_rect = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: art_height,
-        };
-        if let Some(protocol) = app.cover_protocol.as_mut() {
-            frame.render_stateful_widget(
-                StatefulImage::new().resize(Resize::Fit(None)),
-                art_rect,
-                protocol,
-            );
-        } else {
-            frame.render_widget(
-                Paragraph::new("♪\n\nno cover art")
-                    .alignment(Alignment::Center)
-                    .style(dim_style()),
-                art_rect,
-            );
-        }
+    let art_width = (inner.height * 2)
+        .min(inner.width.saturating_sub(24))
+        .min(24);
+    let (art_area, info_area) = if art_width >= 8 {
+        let [art_area, info_area] =
+            Layout::horizontal([Constraint::Length(art_width), Constraint::Min(20)]).areas(inner);
+        (Some(art_area), info_area)
+    } else {
+        (None, inner)
+    };
+    if let Some(art_area) = art_area {
+        draw_cover_art(app, frame, art_area);
     }
 
-    let info_rect = Rect {
-        x: inner.x,
-        y: inner.y + art_height,
-        width: inner.width,
-        height: inner.height.saturating_sub(art_height),
+    let info_height = if info_area.height >= 6 {
+        3
+    } else {
+        2.min(info_area.height)
     };
-    let mut lines = Vec::new();
+    let gauge_height = u16::from(info_area.height > info_height);
+    let [info_area, gauge_area, lyrics_area] = Layout::vertical([
+        Constraint::Length(info_height),
+        Constraint::Length(gauge_height),
+        Constraint::Min(0),
+    ])
+    .areas(info_area);
+
+    let width = info_area.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
     if let Some(song) = &app.current {
+        let (icon, style) = match app.status.as_ref().map(|status| status.state) {
+            Some(PlaybackState::Playing) => ("▶", Style::default().fg(theme().green)),
+            Some(PlaybackState::Paused) => ("❚❚", Style::default().fg(theme().yellow)),
+            _ => ("■", dim_style()),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{icon} "), style),
+            Span::styled(
+                fit(song.display_title(), width.saturating_sub(2)),
+                Style::default()
+                    .fg(theme().green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
         lines.push(Line::from(Span::styled(
-            fit(song.display_title(), inner.width as usize),
-            Style::default()
-                .fg(theme().green)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            fit(song.display_artist(), inner.width as usize),
+            fit(
+                &format!("{} · {}", song.display_artist(), song.display_album()),
+                width,
+            ),
             Style::default().fg(theme().fg),
         )));
-        lines.push(Line::from(Span::styled(
-            fit(song.display_album(), inner.width as usize),
-            dim_style(),
-        )));
+        if info_height >= 3 {
+            let detail = app
+                .status
+                .as_ref()
+                .and_then(|status| {
+                    let audio = status.audio?;
+                    Some(match status.bitrate {
+                        Some(bitrate) => format!("{audio} · {bitrate} kbps"),
+                        None => audio.to_string(),
+                    })
+                })
+                .unwrap_or_default();
+            lines.push(Line::from(Span::styled(fit(&detail, width), dim_style())));
+        }
     } else {
         lines.push(Line::from(Span::styled("Nothing playing", dim_style())));
     }
-    if let Some(status) = &app.status
-        && let Some(audio) = status.audio
-    {
-        let detail = match status.bitrate {
-            Some(bitrate) => format!("{audio} · {bitrate} kbps"),
-            None => audio.to_string(),
-        };
-        lines.push(Line::from(Span::styled(
-            fit(&detail, inner.width as usize),
-            dim_style(),
-        )));
+    frame.render_widget(Paragraph::new(Text::from(lines)), info_area);
+
+    if gauge_area.height > 0 {
+        let (ratio, label, fill) = progress_state(app);
+        frame.render_widget(
+            Gauge::default()
+                .ratio(ratio)
+                .label(Span::styled(label, Style::default().fg(theme().fg)))
+                .gauge_style(Style::default().fg(fill).bg(theme().selected_bg))
+                .style(Style::default().bg(theme().bg)),
+            gauge_area,
+        );
+    }
+
+    draw_card_lyrics(app, frame, lyrics_area);
+}
+
+fn draw_card_lyrics(app: &App, frame: &mut Frame, area: Rect) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let height = area.height as usize;
+    let width = area.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if let Some(doc) = &app.lyrics.doc {
+        if !doc.synced.is_empty() {
+            let position = app.lyrics.adjusted_position(app.effective_elapsed());
+            if let Some(active) = doc.active_index(position) {
+                for (offset, line) in doc.synced.iter().skip(active).take(height).enumerate() {
+                    let style = if offset == 0 {
+                        Style::default()
+                            .fg(theme().accent)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        dim_style()
+                    };
+                    lines.push(Line::from(Span::styled(fit(&line.text, width), style)));
+                }
+            }
+        } else if let Some(plain) = &doc.plain {
+            for line in plain
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .take(height)
+            {
+                lines.push(Line::from(Span::styled(fit(line, width), dim_style())));
+            }
+        }
+    } else if app.lyrics.loading {
+        lines.push(Line::from(Span::styled("loading lyrics…", dim_style())));
+    } else if app.current.is_some() {
+        lines.push(Line::from(Span::styled("Press 6 for lyrics", dim_style())));
     }
     frame.render_widget(
-        Paragraph::new(Text::from(lines)).style(base_style()),
-        info_rect,
+        Paragraph::new(Text::from(lines)).alignment(Alignment::Center),
+        area,
     );
 }
 
@@ -1301,6 +1375,9 @@ fn draw_stats(app: &App, frame: &mut Frame, area: Rect) {
             ));
         }
         lines.push(kv("Queue", status.playlist_length.to_string()));
+        if let Some(crossfade) = status.crossfade.filter(|seconds| *seconds > 0) {
+            lines.push(kv("Crossfade", format!("{crossfade}s")));
+        }
         if let Some(partition) = &status.partition {
             lines.push(kv("Partition", partition.to_string()));
         }
@@ -1394,7 +1471,7 @@ fn draw_stats(app: &App, frame: &mut Frame, area: Rect) {
     );
 }
 
-fn draw_progress(app: &App, frame: &mut Frame, area: Rect) {
+fn progress_state(app: &App) -> (f64, String, Color) {
     let elapsed = app.effective_elapsed();
     // `status` omits duration when the player is stopped; fall back to the
     // current song's tag so the bar still shows a sensible total.
@@ -1403,7 +1480,7 @@ fn draw_progress(app: &App, frame: &mut Frame, area: Rect) {
         .as_ref()
         .and_then(|status| status.duration)
         .or_else(|| app.current.as_ref().and_then(|song| song.duration));
-    let (ratio, label, fill) = match &app.status {
+    match &app.status {
         Some(status) => {
             let ratio = duration
                 .map(|duration| {
@@ -1429,74 +1506,6 @@ fn draw_progress(app: &App, frame: &mut Frame, area: Rect) {
             (ratio, label, fill)
         }
         None => (0.0, "no track".to_string(), theme().dim),
-    };
-
-    frame.render_widget(
-        Gauge::default()
-            .ratio(ratio)
-            .label(Span::styled(label, Style::default().fg(theme().fg)))
-            .gauge_style(Style::default().fg(fill).bg(theme().selected_bg))
-            .style(Style::default().bg(theme().bg)),
-        area,
-    );
-}
-
-fn draw_now_playing(app: &App, frame: &mut Frame, area: Rect) {
-    let info_width = if area.width >= 80 { 40 } else { 0 };
-    let [left, right] =
-        Layout::horizontal([Constraint::Min(10), Constraint::Length(info_width)]).areas(area);
-
-    let (text, style) = match (&app.status, &app.current) {
-        (Some(status), Some(song)) => {
-            let icon = match status.state {
-                PlaybackState::Playing => "▶",
-                PlaybackState::Paused => "❚❚",
-                PlaybackState::Stopped => "■",
-            };
-            let style = match status.state {
-                PlaybackState::Playing => Style::default().fg(theme().green),
-                PlaybackState::Paused => Style::default().fg(theme().yellow),
-                PlaybackState::Stopped => dim_style(),
-            };
-            (
-                format!(
-                    "{icon} {} — {}",
-                    song.display_artist(),
-                    song.display_title()
-                ),
-                style,
-            )
-        }
-        _ => ("· Nothing playing".to_string(), dim_style()),
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            fit(&text, left.width as usize),
-            style,
-        ))),
-        left,
-    );
-
-    if info_width > 0 {
-        let info = app
-            .status
-            .as_ref()
-            .and_then(|status| {
-                let audio = status.audio?;
-                Some(match status.bitrate {
-                    Some(bitrate) => format!("{audio} · {bitrate} kbps"),
-                    None => audio.to_string(),
-                })
-            })
-            .unwrap_or_default();
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                fit(&info, right.width as usize),
-                dim_style(),
-            )))
-            .alignment(Alignment::Right),
-            right,
-        );
     }
 }
 

@@ -28,6 +28,7 @@ const COMMANDS: &[(&str, Action)] = &[
     ("Random: toggle", Action::ToggleRandom),
     ("Single: toggle", Action::ToggleSingle),
     ("Consume: toggle", Action::ToggleConsume),
+    ("Set crossfade…", Action::CrossfadePrompt),
     ("Go to queue", Action::GotoScreen(0)),
     ("Go to library", Action::GotoScreen(1)),
     ("Go to playlists", Action::GotoScreen(2)),

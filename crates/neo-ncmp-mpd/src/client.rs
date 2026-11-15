@@ -234,6 +234,10 @@ impl MpdClient {
         self.command_ok("single", &[bool_arg(enabled)]).await
     }
 
+    pub async fn set_crossfade(&mut self, seconds: u32) -> Result<()> {
+        self.command_ok("crossfade", &[&seconds.to_string()]).await
+    }
+
     pub async fn set_consume(&mut self, enabled: bool) -> Result<()> {
         self.command_ok("consume", &[bool_arg(enabled)]).await
     }

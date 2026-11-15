@@ -28,10 +28,11 @@ restore_session = true
 # clicking a row selects it, and double-clicking activates it.
 mouse = false
 
+# Fetch lyrics for the current song and show the active line in the Now Playing
+# card at the bottom of the screen.
+lyrics_in_card = true
+
 [layout]
-# Show album art / Now Playing beside the queue, and customize pane widths.
-cover_sidebar = true
-cover_width = 40
 # Library pane percentages.
 artists_width = 30
 albums_width = 32

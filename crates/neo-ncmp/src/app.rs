@@ -381,6 +381,7 @@ pub enum InputAction {
     SaveQueueAsPlaylist,
     RenamePlaylist { from: String },
     EditTagField { index: usize },
+    Crossfade,
 }
 
 #[derive(Debug, Clone)]
@@ -923,8 +924,12 @@ impl App {
                     self.send_now_playing();
                 }
                 self.request_cover();
-                if self.screen == Screen::Lyrics {
+                if self.screen == Screen::Lyrics || self.config.ui.lyrics_in_card {
                     self.request_lyrics(false);
+                } else if changed {
+                    self.lyrics.doc = None;
+                    self.lyrics.uri = None;
+                    self.lyrics.loading = false;
                 }
                 if self.screen == Screen::TagEditor {
                     self.load_tag_editor();
@@ -1436,6 +1441,7 @@ impl App {
             Action::ToggleRandom => self.toggle_option(PlayerOption::Random),
             Action::ToggleSingle => self.toggle_option(PlayerOption::Single),
             Action::ToggleConsume => self.toggle_option(PlayerOption::Consume),
+            Action::CrossfadePrompt => self.open_crossfade_input(),
             Action::PlaySelected => self.play_selected(),
             Action::EnqueueSelected => self.enqueue_selected(),
             Action::ReplaceAndPlay => self.replace_and_play(),
@@ -1661,6 +1667,19 @@ impl App {
             return;
         }
         self.tag_editor = TagEditorState::from_song(song);
+    }
+
+    fn open_crossfade_input(&mut self) {
+        let current = self
+            .status
+            .as_ref()
+            .and_then(|status| status.crossfade)
+            .unwrap_or(0);
+        self.input = Some(InputModal {
+            prompt: "Crossfade seconds (0-3600)".into(),
+            value: current.to_string(),
+            action: InputAction::Crossfade,
+        });
     }
 
     fn open_tag_input(&mut self) {
@@ -1947,6 +1966,14 @@ impl App {
         self.toast_info(message);
     }
 
+    pub(crate) fn ipc_crossfade(&mut self, seconds: u32) -> Result<(), String> {
+        if seconds > 3600 {
+            return Err("crossfade must be between 0 and 3600 seconds".into());
+        }
+        self.mpd.send(Command::SetCrossfade(seconds));
+        Ok(())
+    }
+
     pub(crate) fn ipc_volume(&mut self, volume: u8) {
         self.mpd.send(Command::SetVolume(volume.min(100)));
     }
@@ -1978,6 +2005,7 @@ impl App {
             "random": status.is_some_and(|status| status.random),
             "single": status.is_some_and(|status| status.single),
             "consume": status.is_some_and(|status| status.consume),
+            "crossfade": status.and_then(|status| status.crossfade),
             "partition": status.and_then(|status| status.partition.as_deref()),
             "elapsed": self.effective_elapsed().as_secs_f64(),
             "duration": status
@@ -2789,6 +2817,16 @@ impl App {
                             self.tag_editor.message = None;
                         }
                     }
+                    InputAction::Crossfade => match value.parse::<u32>() {
+                        Ok(seconds) if seconds <= 3600 => {
+                            self.mpd.send(Command::SetCrossfade(seconds));
+                            self.toast_info(format!("Crossfade set to {seconds}s"));
+                        }
+                        _ => {
+                            self.input = Some(modal);
+                            self.toast_error("Crossfade must be between 0 and 3600 seconds");
+                        }
+                    },
                 }
             }
             KeyCode::Backspace => {
@@ -3221,6 +3259,54 @@ mod tests {
     }
 
     #[test]
+    fn current_song_fetches_lyrics_for_the_now_playing_card() {
+        let (mut app, mut commands) = app_with_commands();
+        app.config.ui.lyrics_in_card = true;
+        app.screen = Screen::Queue;
+        app.on_msg(Msg::CurrentSong(Some(Song {
+            uri: Arc::from("a/one.flac"),
+            artist: Some(Arc::from("Artist")),
+            title: Some(Arc::from("Title")),
+            ..Song::default()
+        })));
+        let mut fetched = false;
+        while let Ok(command) = commands.try_recv() {
+            if matches!(command, Command::FetchLyrics { .. }) {
+                fetched = true;
+            }
+        }
+        assert!(
+            fetched,
+            "the card should request lyrics for the current song"
+        );
+
+        app.config.ui.lyrics_in_card = false;
+        app.on_msg(Msg::CurrentSong(Some(Song {
+            uri: Arc::from("a/two.flac"),
+            title: Some(Arc::from("Other")),
+            ..Song::default()
+        })));
+        assert!(app.lyrics.doc.is_none());
+        assert!(app.lyrics.uri.is_none());
+    }
+
+    #[test]
+    fn crossfade_prompt_sends_the_new_value() {
+        let (mut app, mut commands) = app_with_commands();
+        app.status = Some(MpdStatus {
+            crossfade: Some(3),
+            ..MpdStatus::default()
+        });
+        app.handle_action(Action::CrossfadePrompt);
+        let modal = app.input.as_mut().expect("crossfade input");
+        assert_eq!(modal.value, "3");
+        modal.value = "5".into();
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.input.as_ref().map(|modal| modal.value.as_str()), None);
+        assert!(matches!(commands.try_recv(), Ok(Command::SetCrossfade(5))));
+    }
+
+    #[test]
     fn ipc_handles_screen_action_status_and_errors() {
         let (mut app, mut commands) = app_with_commands();
         app.queue = queue_songs(2);
@@ -3240,6 +3326,10 @@ mod tests {
             commands.try_recv(),
             Ok(Command::SwitchPartition(name)) if name == "headphones"
         ));
+
+        let response = crate::ipc::handle(r#"{"command":"crossfade","value":7}"#, &mut app);
+        assert!(response.contains(r#""ok":true"#));
+        assert!(matches!(commands.try_recv(), Ok(Command::SetCrossfade(7))));
 
         let response = crate::ipc::handle(r#"{"command":"status"}"#, &mut app);
         assert!(response.contains(r#""queue_length":2"#));
@@ -3628,7 +3718,7 @@ mod tests {
     }
 
     #[test]
-    fn cover_sidebar_paints_halfblocks() {
+    fn now_playing_card_paints_halfblocks() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -3687,7 +3777,6 @@ mod tests {
 
     fn snapshot_app() -> App {
         let mut app = app();
-        app.config.layout.cover_sidebar = false;
         app.connection = ConnectionState::Connected("0.24.0".into());
         app.status = Some(MpdStatus {
             state: PlaybackState::Paused,
@@ -3761,14 +3850,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual benchmark; builds a 100k-song queue"]
-    fn benchmark_rendering_a_large_queue() {
+    #[ignore = "manual benchmark; builds a 100k-song queue and library"]
+    fn benchmark_every_screen_frame_time() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         use std::time::Instant;
 
         let mut app = app();
-        app.config.layout.cover_sidebar = false;
+        app.config.visualizer.enabled = true;
+        app.connection = ConnectionState::Connected("0.24.0".into());
         app.queue = (0..100_000)
             .map(|position| Song {
                 pos: Some(position),
@@ -3781,21 +3871,75 @@ mod tests {
                 ..Song::default()
             })
             .collect();
+        app.library = Some(Arc::new(Library::build(app.queue.clone())));
+        app.playlists = (0..50)
+            .map(|index| Playlist {
+                name: Arc::from(format!("Playlist {index}")),
+                last_modified: Some(Arc::from("2026-01-01T00:00:00Z")),
+            })
+            .collect();
+        app.playlist_songs = app.queue.iter().take(500).cloned().collect();
+        app.outputs = (0..4)
+            .map(|id| MpdOutput {
+                id,
+                name: Arc::from(format!("Output {id}")),
+                enabled: id % 2 == 0,
+            })
+            .collect();
+        app.stats = Some(MpdStats {
+            artists: 2_000,
+            albums: 20_000,
+            songs: 100_000,
+            uptime: Duration::from_secs(86_400),
+            playtime: Duration::from_secs(1_000_000),
+            db_playtime: Duration::from_secs(18_000_000),
+            db_update: Some(1_700_000_000),
+        });
+        app.browser.entries = (0..500)
+            .map(|index| DirEntry {
+                kind: if index % 3 == 0 {
+                    EntryKind::Directory
+                } else {
+                    EntryKind::File
+                },
+                uri: Arc::from(format!("Music/Album {index}")),
+                name: Arc::from(format!("Album {index}")),
+                song: None,
+            })
+            .collect();
+        app.browser.loading = false;
         app.status = Some(MpdStatus {
             state: PlaybackState::Paused,
+            volume: Some(80),
             playlist_length: 100_000,
+            song_pos: Some(50_000),
+            elapsed: Duration::from_secs(30),
+            duration: Some(Duration::from_secs(180)),
             ..MpdStatus::default()
         });
-        app.current = app.queue.first().cloned();
-
-        let mut terminal = Terminal::new(TestBackend::new(200, 60)).unwrap();
-        let started = Instant::now();
-        for _ in 0..100 {
-            terminal
-                .draw(|frame| crate::ui::draw(&mut app, frame))
-                .unwrap();
+        app.current = app.queue.get(50_000).cloned();
+        if let Some(song) = &app.current {
+            app.tag_editor = TagEditorState::from_song(song);
         }
-        eprintln!("100 queue frames: {:?}", started.elapsed());
+        app.spectrum = vec![0.5; 64];
+
+        for (width, height) in [(120, 40), (200, 60)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            for screen in Screen::ALL {
+                app.screen = screen;
+                let started = Instant::now();
+                for _ in 0..50 {
+                    terminal
+                        .draw(|frame| crate::ui::draw(&mut app, frame))
+                        .unwrap();
+                }
+                eprintln!(
+                    "{screen:?} {width}x{height}: {:?} total, {:?} per frame",
+                    started.elapsed(),
+                    started.elapsed() / 50
+                );
+            }
+        }
     }
 
     #[test]
@@ -3883,18 +4027,36 @@ mod tests {
     }
 
     #[test]
-    fn layout_can_hide_the_cover_sidebar() {
+    fn now_playing_card_shows_on_normal_terminals_and_hides_on_tiny_ones() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
         let mut app = app();
-        app.config.layout.cover_sidebar = false;
         app.current = Some(Song {
             uri: Arc::from("a/one.flac"),
+            artist: Some(Arc::from("An Artist")),
+            album: Some(Arc::from("An Album")),
             title: Some(Arc::from("A Track")),
             ..Song::default()
         });
+
         let backend = TestBackend::new(150, 42);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Now Playing"));
+        assert!(text.contains("A Track"));
+        assert!(text.contains("Queue"));
+
+        let backend = TestBackend::new(150, 12);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| crate::ui::draw(&mut app, frame))
@@ -3920,6 +4082,8 @@ mod tests {
             ..Song::default()
         }])));
         app.screen = Screen::Library;
+        let backend = TestBackend::new(150, 42);
+        let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| crate::ui::draw(&mut app, frame))
             .unwrap();

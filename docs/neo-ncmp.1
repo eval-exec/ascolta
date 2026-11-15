@@ -50,8 +50,8 @@ API key and secret.
 .B ipc \fICOMMAND\fR [\fIVALUE\fR]
 Send a JSON line over the running instance's private Unix socket. Commands:
 \fBping\fR, \fBstatus\fR, \fBscreen\fR, \fBsearch\fR, \fBaction\fR,
-\fBvolume\fR, \fBseek\fR, \fBplaylist\fR, \fBpartition\fR, and
-\fBnotify\fR. The socket
+\fBvolume\fR, \fBcrossfade\fR, \fBseek\fR, \fBplaylist\fR,
+\fBpartition\fR, and \fBnotify\fR. The socket
 defaults to \fI$XDG_RUNTIME_DIR/neo-ncmp/socket\fR and mode 0600; configure it
 with the \fB[ipc]\fR table.
 .SH REMOTE ACTIONS
@@ -67,6 +67,9 @@ Absolute or relative (\fB+10\fR / \fB\-10\fR) seek.
 .TP
 .B repeat|random|single|consume \fIon|off|toggle\fR
 Player options.
+.TP
+.B crossfade \fISECONDS\fR
+Print the current crossfade when omitted, or set it in seconds (0 disables).
 .TP
 .B shuffle, clear
 Queue operations.

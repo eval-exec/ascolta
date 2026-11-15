@@ -72,6 +72,7 @@ pub enum Command {
         single: bool,
     },
     SetVolume(u8),
+    SetCrossfade(u32),
     SetOption(PlayerOption, bool),
     PlayPos(u32),
 
@@ -426,6 +427,10 @@ async fn execute(
         }
         SetVolume(volume) => {
             client.set_volume(volume).await?;
+            refresh_status(client, tx).await?;
+        }
+        SetCrossfade(seconds) => {
+            client.set_crossfade(seconds).await?;
             refresh_status(client, tx).await?;
         }
         SetOption(option, enabled) => {

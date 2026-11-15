@@ -30,7 +30,7 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 ### Modern integrations
 
 - [x] Album art: MPD `readpicture`/`albumart`, halfblock/Kitty/Sixel/iTerm2 via
-      `ratatui-image`, background fetch, in-memory cache, Now Playing sidebar
+      `ratatui-image`, background fetch, in-memory cache, bottom Now Playing card
 - [x] Synced lyrics: local `.lrc` preference + LRCLIB fallback, LRC parser,
       active-line display, offset adjustment, background fetch
 - [x] MPRIS server: media keys/playerctl, metadata, PlayPause, seek, position,
@@ -51,7 +51,9 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 
 - [x] Structured filter DSL (`artist:`, `album:`, `year:>=1990`, negated filters)
 - [x] Saved smart playlists: named filter queries in the palette; play or enqueue all results
-- [x] Configurable multi-column layout: cover sidebar and pane proportions
+- [x] Configurable multi-column layout: library and playlist pane proportions
+- [x] Bottom Now Playing card with cover art, metadata, progress, and lyrics
+- [x] Crossfade control from the palette, `remote crossfade`, and IPC
 - [x] Mouse support (opt-in): wheel, header tabs, row selection, double-click actions
 - [x] Search history (persisted) and saved filter queries
 - [x] TrackList (current-centred window) and Playlists MPRIS interfaces
@@ -72,8 +74,7 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 - [x] Property-style keymap and MPD argument-quoting tests
 - [x] Property-style fuzzing of the MPD response parser
 - [x] Ad-hoc benchmark test for indexing/filtering a synthetic 100k-song library
-- [x] Ignored benchmark for rendering a 100k-song queue
-- [ ] End-to-end frame-time benchmarks for every screen
+- [x] End-to-end frame-time benchmark for every screen at 120x40 and 200x60
 - [x] CI live-MPD job against a private MPD instance
 - [x] Packaging: Nix flake, PKGBUILD, man page, shell completions
 - [x] GitHub release workflow with Linux x86_64/aarch64 archives
