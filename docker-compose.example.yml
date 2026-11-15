@@ -1,0 +1,19 @@
+services:
+  ascolta:
+    image: ghcr.io/eval-exec/ascolta:latest
+    stdin_open: true
+    tty: true
+    init: true
+    # MPD and other host services are reachable at 127.0.0.1.
+    network_mode: host
+    environment:
+      TERM: xterm-256color
+      ASCOLTA_MPD_HOST: 127.0.0.1
+      ASCOLTA_MPD_PORT: "6600"
+    volumes:
+      - ~/.config/ascolta:/config/ascolta
+      - ~/.local/state/ascolta:/state/ascolta
+      - ~/.cache/ascolta:/cache/ascolta
+      - ~/Music:/music
+    # If the host UID is not 1000, uncomment and adjust:
+    # user: "1000:1000"
