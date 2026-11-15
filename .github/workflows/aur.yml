@@ -1,0 +1,41 @@
+name: AUR
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  aur:
+    runs-on: ubuntu-latest
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip when AUR credentials are not configured
+        if: env.AUR_SSH_PRIVATE_KEY == ''
+        run: echo "AUR_SSH_PRIVATE_KEY is not set; skipping AUR update."
+
+      - name: Set pkgver from the release tag
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sed -i -E "s/^pkgver=.*/pkgver=${version}/" PKGBUILD
+          sed -i -E "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          grep -E '^pkg(ver|rel)=' PKGBUILD
+
+      - name: Publish to AUR
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        uses: KSXGitHub/github-actions-deploy-aur@v3
+        with:
+          pkgname: neo-ncmp
+          pkgbuild: ./PKGBUILD
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ github.ref_name }}"
+          ssh_keyscan_types: rsa,ecdsa,ed25519

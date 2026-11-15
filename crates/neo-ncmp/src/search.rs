@@ -504,6 +504,50 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual benchmark; loads a synthetic 100k-song library"]
+    fn benchmark_search_on_a_large_library() {
+        use std::time::Instant;
+
+        let songs: Vec<Song> = (0..100_000)
+            .map(|index| {
+                let artist = format!("Artist {}", index % 2_000);
+                let album = format!("Album {}", index % 20_000);
+                let title = format!("Track {index}");
+                Song {
+                    uri: Arc::from(format!("{artist}/{album}/{title}.flac")),
+                    artist: Some(Arc::from(artist)),
+                    album: Some(Arc::from(album)),
+                    title: Some(Arc::from(title)),
+                    format: Some(Arc::from("FLAC")),
+                    date: Some(Arc::from(format!("{}-01-01", 1970 + index % 55))),
+                    ..Song::default()
+                }
+            })
+            .collect();
+
+        let started = Instant::now();
+        let library = Library::build(songs);
+        let index = SearchIndex::build(&library);
+        eprintln!("index: {:?} ({} items)", started.elapsed(), index.len());
+
+        for query in [
+            "9999",
+            "artist:Artist 123",
+            "year:1990-1999",
+            "album:Album 9999",
+        ] {
+            let started = Instant::now();
+            let results = index.score(query);
+            eprintln!(
+                "query {query:?}: {:?}, {} matches",
+                started.elapsed(),
+                results.len()
+            );
+            assert!(!results.is_empty());
+        }
+    }
+
+    #[test]
     fn pluralises_counts() {
         assert_eq!(plural(0), "s");
         assert_eq!(plural(1), "");

@@ -227,6 +227,31 @@ mod tests {
         assert!(quote("line\nbreak").is_err());
     }
 
+    #[tokio::test]
+    async fn arbitrary_response_frames_never_panic() {
+        let alphabet: Vec<char> = "abOKACKbinary: 0129\\\"'/:🎵界-_".chars().collect();
+        let mut state = 0x5eed_1234u32;
+        for _ in 0..500 {
+            let (mut writer, reader) = duplex(64 * 1024);
+            let mut frame = String::new();
+            let lines = (state as usize % 8) + 1;
+            for _ in 0..lines {
+                let length = (state as usize) % 40;
+                for _ in 0..length {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    frame.push(alphabet[(state as usize) % alphabet.len()]);
+                }
+                frame.push('\n');
+            }
+            frame.push_str("OK\n");
+            writer.write_all(frame.as_bytes()).await.unwrap();
+            writer.shutdown().await.unwrap();
+
+            let mut reader = BufReader::new(reader);
+            let _ = read_response(&mut reader).await;
+        }
+    }
+
     #[test]
     fn formats_commands() {
         assert_eq!(
