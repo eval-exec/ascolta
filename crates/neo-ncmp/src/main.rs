@@ -1,4 +1,5 @@
 mod app;
+mod artistart;
 mod config;
 mod coverart;
 mod filter;

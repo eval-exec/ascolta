@@ -60,6 +60,8 @@ pub struct UiConfig {
     pub mouse: bool,
     /// Fetch lyrics for the current song so the Now Playing card can show them.
     pub lyrics_in_card: bool,
+    /// Draw small album/artist thumbnails at the start of list rows.
+    pub inline_art: bool,
 }
 
 impl Default for UiConfig {
@@ -72,6 +74,7 @@ impl Default for UiConfig {
             restore_session: true,
             mouse: false,
             lyrics_in_card: true,
+            inline_art: true,
         }
     }
 }
@@ -183,11 +186,22 @@ impl IpcConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ArtworkConfig {
     /// Fetch missing embedded art from the Cover Art Archive.
     pub online: bool,
+    /// Fetch artist portraits online (Deezer) for artist rows.
+    pub artist_images: bool,
+}
+
+impl Default for ArtworkConfig {
+    fn default() -> Self {
+        Self {
+            online: false,
+            artist_images: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -337,7 +351,9 @@ mod tests {
         assert_eq!(config.ui.tick_rate_ms, 250);
         assert!(!config.ui.mouse);
         assert!(config.ui.lyrics_in_card);
+        assert!(config.ui.inline_art);
         assert!(!config.artwork.online);
+        assert!(config.artwork.artist_images);
     }
 
     #[test]
@@ -379,6 +395,10 @@ mod tests {
             enabled = false
             path = "/tmp/neo-ncmp-test.sock"
 
+            [artwork]
+            online = true
+            artist_images = false
+
             [layout]
             artists_width = 25
             albums_width = 35
@@ -409,6 +429,8 @@ mod tests {
         );
         assert!(config.ui.mouse);
         assert!(!config.ui.lyrics_in_card);
+        assert!(config.artwork.online);
+        assert!(!config.artwork.artist_images);
         assert_eq!(config.layout.songs_width, 40);
         assert!(config.scrobbling.listenbrainz_enabled());
         assert!(!config.scrobbling.lastfm_enabled());

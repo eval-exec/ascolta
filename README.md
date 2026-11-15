@@ -50,7 +50,8 @@ neo-ncmp is a first-class controller and desktop citizen.
 
 **Modern extras**
 
-- Album art in the terminal (Kitty/Sixel/iTerm2/halfblocks) with background fetch and cache, shown in the bottom Now Playing card
+- Album art in the terminal (Kitty/Sixel/iTerm2/halfblocks) with background fetch and cache, shown in the bottom Now Playing card and as inline row thumbnails
+- Online artist portraits from Deezer (keyless) for artist rows, cached on disk
 - Optional Cover Art Archive fallback for tracks without embedded or folder art
 - Synced lyrics from local `.lrc` or LRCLIB, active-line highlight in the Lyrics screen and Now Playing card, `[`/`]` offset
 - MPRIS server: media keys, `playerctl`, desktop widgets, TrackList and Playlists interfaces; released cleanly on exit
@@ -356,6 +357,11 @@ Set `[artwork] online = true` to fall back to MusicBrainz and the Cover Art
 Archive when both MPD sources come up empty. Lookups run in the background,
 respect MusicBrainz's request spacing, and cache covers in
 `~/.cache/neo-ncmp/covers/`; failed lookups are remembered for a week.
+
+Artist rows use Deezer's keyless search API for portraits, cached in
+`~/.cache/neo-ncmp/artists/`. Disable with `[artwork] artist_images = false`.
+Inline row thumbnails are controlled by `[ui] inline_art`; they render on every
+terminal, though Kitty/Sixel/iTerm2 give far sharper thumbnails than halfblocks.
 
 ### Tag editing
 

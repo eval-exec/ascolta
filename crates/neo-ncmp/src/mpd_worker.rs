@@ -169,6 +169,10 @@ pub enum Msg {
         sent: usize,
         remaining: usize,
     },
+    ArtistImage {
+        artist: String,
+        picture: Option<Picture>,
+    },
     Ipc {
         line: String,
         reply: tokio::sync::oneshot::Sender<String>,

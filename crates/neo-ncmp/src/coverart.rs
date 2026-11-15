@@ -67,7 +67,10 @@ struct Release {
 
 /// Starts a background lookup. The result always arrives as one `OnlineCover`.
 pub fn spawn(request: Request, tx: mpsc::UnboundedSender<Msg>) {
-    tokio::spawn(async move {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    runtime.spawn(async move {
         let picture = match fetch(&request).await {
             Ok(picture) => picture,
             Err(error) => {
@@ -254,7 +257,7 @@ fn lucene_term(value: &str) -> String {
         .join(" ")
 }
 
-fn image_magic(data: &[u8]) -> bool {
+pub(crate) fn image_magic(data: &[u8]) -> bool {
     data.starts_with(&[0xFF, 0xD8, 0xFF])
         || data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
         || data.starts_with(b"GIF8")

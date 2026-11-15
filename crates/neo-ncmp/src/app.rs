@@ -19,6 +19,7 @@ use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use tokio::sync::{mpsc, watch};
 
+use crate::artistart;
 use crate::config::Config;
 use crate::coverart;
 use crate::input::{Action, Keymap};
@@ -37,6 +38,33 @@ use crate::tags::TagUpdate;
 use crate::ui;
 use crate::visualizer;
 use crate::widgets::ListView;
+
+/// Where a row's artwork comes from.
+#[derive(Debug, Clone)]
+pub enum ArtSource {
+    Song(Arc<str>),
+    Artist(Arc<str>),
+}
+
+impl ArtSource {
+    pub fn key(&self) -> Arc<str> {
+        match self {
+            Self::Song(uri) => uri.clone(),
+            Self::Artist(name) => Arc::from(format!("artist:{name}")),
+        }
+    }
+}
+
+/// One inline artwork cell queued by a list renderer.
+#[derive(Debug, Clone)]
+pub struct ArtSlot {
+    pub key: Arc<str>,
+    pub source: ArtSource,
+    pub rect: Rect,
+}
+
+pub const ART_WIDTH: u16 = 3;
+pub const ART_GUTTER: u16 = 4;
 
 /// A rendered list region, used to translate mouse coordinates into rows.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -524,6 +552,12 @@ pub struct App {
     cover_requested: Option<Arc<str>>,
     cover_cache: std::collections::HashMap<Arc<str>, Option<Arc<Picture>>>,
     remote_cover_inflight: HashSet<Arc<str>>,
+    pub art_slots: Vec<ArtSlot>,
+    pub art_gutter: u16,
+    thumb_protocols: std::collections::HashMap<Arc<str>, StatefulProtocol>,
+    artist_images: std::collections::HashMap<Arc<str>, Option<Arc<Picture>>>,
+    artist_inflight: HashSet<Arc<str>>,
+    art_inflight: HashSet<Arc<str>>,
     mpris_queue: Arc<Vec<Song>>,
     mpris_playlists: Arc<Vec<(String, Option<String>)>>,
     pub mouse: MouseLayout,
@@ -605,6 +639,12 @@ impl App {
             cover_requested: None,
             cover_cache: std::collections::HashMap::new(),
             remote_cover_inflight: HashSet::new(),
+            art_slots: Vec::new(),
+            art_gutter: 0,
+            thumb_protocols: std::collections::HashMap::new(),
+            artist_images: std::collections::HashMap::new(),
+            artist_inflight: HashSet::new(),
+            art_inflight: HashSet::new(),
             mpris_queue: Arc::default(),
             mpris_playlists: Arc::default(),
             mouse: MouseLayout::default(),
@@ -991,7 +1031,9 @@ impl App {
                 let uri: Arc<str> = Arc::from(uri.as_str());
                 let picture = picture.map(Arc::new);
                 let missing = picture.is_none();
-                if self.cover_cache.len() >= 64 {
+                self.art_inflight.remove(&uri);
+                self.thumb_protocols.remove(&uri);
+                if self.cover_cache.len() >= 128 {
                     self.cover_cache.clear();
                 }
                 self.cover_cache.insert(uri.clone(), picture.clone());
@@ -1030,6 +1072,17 @@ impl App {
             Msg::Ipc { line, reply } => {
                 let response = crate::ipc::handle(&line, self);
                 let _ = reply.send(response);
+            }
+            Msg::ArtistImage { artist, picture } => {
+                let name: Arc<str> = Arc::from(artist.as_str());
+                self.artist_inflight.remove(&name);
+                self.thumb_protocols
+                    .remove(ArtSource::Artist(name.clone()).key().as_ref());
+                let picture = picture.map(Arc::new);
+                if self.artist_images.len() >= 128 {
+                    self.artist_images.clear();
+                }
+                self.artist_images.insert(name, picture);
             }
             Msg::PartitionChanged(name) => {
                 self.toast_info(format!("Switched to partition \"{name}\""));
@@ -1487,6 +1540,46 @@ impl App {
             }
         });
         self.toast_info("Retrying pending scrobbles…");
+    }
+
+    /// Returns a cached thumbnail protocol, requesting the artwork if needed.
+    pub fn thumbnail_for(&mut self, slot: &ArtSlot) -> Option<&mut StatefulProtocol> {
+        if !self.thumb_protocols.contains_key(&slot.key) {
+            let picture = match &slot.source {
+                ArtSource::Song(uri) => match self.cover_cache.get(uri) {
+                    Some(Some(picture)) => picture.clone(),
+                    Some(None) => return None,
+                    None => {
+                        if self.art_inflight.insert(uri.clone()) {
+                            self.mpd.send(Command::FetchCover(uri.to_string()));
+                        }
+                        return None;
+                    }
+                },
+                ArtSource::Artist(name) => {
+                    if !self.config.artwork.artist_images {
+                        return None;
+                    }
+                    match self.artist_images.get(name) {
+                        Some(Some(picture)) => picture.clone(),
+                        Some(None) => return None,
+                        None => {
+                            if self.artist_inflight.insert(name.clone()) {
+                                artistart::spawn(name.to_string(), self.event_tx.clone());
+                            }
+                            return None;
+                        }
+                    }
+                }
+            };
+            let image = image::load_from_memory(&picture.data).ok()?;
+            if self.thumb_protocols.len() >= 128 {
+                self.thumb_protocols.clear();
+            }
+            self.thumb_protocols
+                .insert(slot.key.clone(), self.picker.new_resize_protocol(image));
+        }
+        self.thumb_protocols.get_mut(&slot.key)
     }
 
     fn publish_mpris(&self) {
@@ -3715,6 +3808,52 @@ mod tests {
         assert!(app.cover_protocol.is_some());
         app.set_cover(None);
         assert!(app.cover_protocol.is_none());
+    }
+
+    #[test]
+    fn inline_art_paints_queue_row_thumbnails() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app();
+        app.screen = Screen::Queue;
+        app.queue = vec![Song {
+            pos: Some(0),
+            uri: Arc::from("a/one.flac"),
+            artist: Some(Arc::from("An Artist")),
+            album: Some(Arc::from("An Album")),
+            title: Some(Arc::from("A Track")),
+            ..Song::default()
+        }];
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([200, 50, 50]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        app.cover_cache.insert(
+            Arc::from("a/one.flac"),
+            Some(Arc::new(Picture {
+                mime: Arc::from("image/png"),
+                data: bytes.into_inner(),
+            })),
+        );
+
+        let backend = TestBackend::new(150, 42);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(&mut app, frame))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            text.contains('▀') || text.contains('▄') || text.contains('█'),
+            "inline row art should be painted"
+        );
     }
 
     #[test]

@@ -16,8 +16,8 @@ use ratatui_image::{Resize, StatefulImage};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{
-    App, Confirm, ConnectionState, HitArea, InputModal, LibraryPane, PlaylistPane, Screen, Toast,
-    ToastLevel,
+    ART_GUTTER, ART_WIDTH, App, ArtSlot, ArtSource, Confirm, ConnectionState, HitArea, InputModal,
+    LibraryPane, PlaylistPane, Screen, Toast, ToastLevel,
 };
 use crate::search::SearchKind;
 use crate::widgets::{ListView, fit, fit_right};
@@ -130,6 +130,17 @@ fn dim_style() -> Style {
 pub fn draw(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
     app.mouse = crate::app::MouseLayout::default();
+    let modal = app.search.active
+        || app.palette.active
+        || app.help
+        || app.input.is_some()
+        || app.confirm.is_some();
+    app.art_gutter = if app.config.ui.inline_art && area.width >= 72 && !modal {
+        ART_GUTTER
+    } else {
+        0
+    };
+    app.art_slots.clear();
     frame.render_widget(Block::default().style(base_style()), area);
 
     let card_height = (area.height / 4).clamp(6, 11);
@@ -144,6 +155,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
         draw_header(app, frame, header);
         draw_main(app, frame, main);
         draw_now_playing_card(app, frame, card);
+        paint_art_slots(app, frame);
         draw_footer(app, frame, footer);
     } else if area.height >= 12 {
         let [header, main, footer] = Layout::vertical([
@@ -154,6 +166,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
         .areas(area);
         draw_header(app, frame, header);
         draw_main(app, frame, main);
+        paint_art_slots(app, frame);
         draw_footer(app, frame, footer);
     } else {
         let [header, main, footer] = Layout::vertical([
@@ -164,6 +177,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
         .areas(area);
         draw_header(app, frame, header);
         draw_main(app, frame, main);
+        paint_art_slots(app, frame);
         draw_footer(app, frame, footer);
     }
 
@@ -184,6 +198,23 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
     }
     if app.help {
         draw_help(frame, area);
+    }
+}
+
+fn paint_art_slots(app: &mut App, frame: &mut Frame) {
+    if app.art_gutter == 0 {
+        app.art_slots.clear();
+        return;
+    }
+    let slots = std::mem::take(&mut app.art_slots);
+    for slot in slots {
+        if let Some(protocol) = app.thumbnail_for(&slot) {
+            frame.render_stateful_widget(
+                StatefulImage::new().resize(Resize::Fit(None)),
+                slot.rect,
+                protocol,
+            );
+        }
     }
 }
 
@@ -341,7 +372,15 @@ fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
         height: inner.height - 1,
         ..inner
     };
-    render_song_header(frame, header_area);
+    let gutter = app.art_gutter;
+    render_song_header(
+        frame,
+        Rect {
+            x: header_area.x + gutter,
+            width: header_area.width.saturating_sub(gutter),
+            ..header_area
+        },
+    );
 
     let viewport = list_area.height as usize;
     app.queue_view.ensure_visible(app.queue.len(), viewport);
@@ -358,13 +397,30 @@ fn draw_queue(app: &mut App, frame: &mut Frame, area: Rect) {
         let current = app.is_current(song);
         let selected = index == cursor;
         let style = row_style(selected, current);
-        let line = song_line(song, inner.width as usize, current, false);
+        let line = song_line(
+            song,
+            inner.width.saturating_sub(gutter) as usize,
+            current,
+            false,
+        );
+        if gutter > 0 {
+            app.art_slots.push(ArtSlot {
+                key: song.uri.clone(),
+                source: ArtSource::Song(song.uri.clone()),
+                rect: Rect {
+                    x: list_area.x,
+                    y: list_area.y + row as u16,
+                    width: ART_WIDTH.min(gutter),
+                    height: 1,
+                },
+            });
+        }
         frame.render_widget(
             Paragraph::new(line).style(style),
             Rect {
-                x: list_area.x,
+                x: list_area.x + gutter,
                 y: list_area.y + row as u16,
-                width: list_area.width,
+                width: list_area.width.saturating_sub(gutter),
                 height: 1,
             },
         );
@@ -555,8 +611,9 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
         app.library_song_count(),
     );
     let pane = app.library_view.pane;
+    let gutter = app.art_gutter;
 
-    let artists_hit = {
+    let (artists_hit, artists_slots) = {
         let library = app.library.as_ref().expect("checked above");
         let view = &mut app.library_view.artists;
         render_list_pane(
@@ -566,6 +623,8 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
             artist_count,
             view,
             pane == LibraryPane::Artists,
+            gutter,
+            |index| Some(ArtSource::Artist(library.artists()[index].name.clone())),
             |index| {
                 let artist = &library.artists()[index];
                 Line::from(vec![
@@ -576,8 +635,9 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
         )
     };
     app.mouse.library_artists = artists_hit;
+    app.art_slots.extend(artists_slots);
 
-    let albums_hit = {
+    let (albums_hit, albums_slots) = {
         let library = app.library.as_ref().expect("checked above");
         let artist = library.artists().get(artist_cursor);
         let view = &mut app.library_view.albums;
@@ -588,6 +648,14 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
             album_count,
             view,
             pane == LibraryPane::Albums,
+            gutter,
+            |index| {
+                artist
+                    .and_then(|artist| artist.albums.get(index))
+                    .and_then(|album| album.songs.first())
+                    .and_then(|&song_index| library.song(song_index))
+                    .map(|song| ArtSource::Song(song.uri.clone()))
+            },
             |index| {
                 let album = &artist.expect("non-empty pane").albums[index];
                 let mut spans = vec![Span::raw(album.name.to_string())];
@@ -603,15 +671,16 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
         )
     };
     app.mouse.library_albums = albums_hit;
+    app.art_slots.extend(albums_slots);
 
-    let songs_hit = {
+    let (songs_hit, songs_slots) = {
         let library = app.library.as_ref().expect("checked above");
         let album = library
             .artists()
             .get(artist_cursor)
             .and_then(|artist| artist.albums.get(album_cursor));
         let view = &mut app.library_view.songs;
-        let width = songs_area.width.saturating_sub(2) as usize;
+        let width = songs_area.width.saturating_sub(2 + gutter) as usize;
         render_list_pane(
             frame,
             songs_area,
@@ -619,6 +688,13 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
             song_count,
             view,
             pane == LibraryPane::Songs,
+            gutter,
+            |index| {
+                album
+                    .and_then(|album| album.songs.get(index))
+                    .and_then(|&song_index| library.song(song_index))
+                    .map(|song| ArtSource::Song(song.uri.clone()))
+            },
             |index| {
                 let Some(song) = album
                     .and_then(|album| album.songs.get(index))
@@ -632,6 +708,7 @@ fn draw_library(app: &mut App, frame: &mut Frame, area: Rect) {
         )
     };
     app.mouse.library_songs = songs_hit;
+    app.art_slots.extend(songs_slots);
 }
 
 fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -645,8 +722,9 @@ fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
     let pane = app.playlist_pane;
     let selected_name = app.selected_playlist_name();
     let current_uri = app.current.as_ref().map(|song| song.uri.clone());
+    let gutter = app.art_gutter;
 
-    let playlists_hit = {
+    let (playlists_hit, playlists_slots) = {
         let playlists = &app.playlists;
         let view = &mut app.playlists_view;
         render_list_pane(
@@ -656,6 +734,8 @@ fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
             playlist_count,
             view,
             pane == PlaylistPane::Playlists,
+            gutter,
+            |_| None,
             |index| {
                 let playlist = &playlists[index];
                 let mut spans = vec![Span::raw(playlist.name.to_string())];
@@ -670,15 +750,16 @@ fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
         )
     };
     app.mouse.playlists = playlists_hit;
+    app.art_slots.extend(playlists_slots);
 
-    let songs_hit = {
+    let (songs_hit, songs_slots) = {
         let songs = &app.playlist_songs;
         let view = &mut app.playlist_songs_view;
         let title = selected_name
             .as_deref()
             .map(|name| format!("Songs — {name}"))
             .unwrap_or_else(|| "Songs".into());
-        let width = songs_area.width.saturating_sub(2) as usize;
+        let width = songs_area.width.saturating_sub(2 + gutter) as usize;
         render_list_pane(
             frame,
             songs_area,
@@ -686,6 +767,8 @@ fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
             song_count,
             view,
             pane == PlaylistPane::Songs,
+            gutter,
+            |index| Some(ArtSource::Song(songs[index].uri.clone())),
             |index| {
                 let song = &songs[index];
                 let current = current_uri.as_ref().is_some_and(|uri| song.uri == *uri);
@@ -694,6 +777,7 @@ fn draw_playlists(app: &mut App, frame: &mut Frame, area: Rect) {
         )
     };
     app.mouse.playlist_songs = songs_hit;
+    app.art_slots.extend(songs_slots);
 }
 
 fn draw_lyrics(app: &App, frame: &mut Frame, area: Rect) {
@@ -1035,11 +1119,24 @@ fn draw_browser(app: &mut App, frame: &mut Frame, area: Rect) {
         rect: inner,
         offset: start,
     });
-    let width = inner.width as usize;
+    let gutter = app.art_gutter;
+    let width = inner.width.saturating_sub(gutter) as usize;
     let name_width = (width * 2 / 5).max(10);
 
     for (row, index) in (start..end).enumerate() {
         let entry = &app.browser.entries[index];
+        if gutter > 0 && entry.kind == EntryKind::File {
+            app.art_slots.push(ArtSlot {
+                key: entry.uri.clone(),
+                source: ArtSource::Song(entry.uri.clone()),
+                rect: Rect {
+                    x: inner.x,
+                    y: inner.y + row as u16,
+                    width: ART_WIDTH.min(gutter),
+                    height: 1,
+                },
+            });
+        }
         let (marker, color) = match entry.kind {
             EntryKind::Directory => ("[D]", theme().accent),
             EntryKind::Playlist => ("[P]", theme().purple),
@@ -1673,24 +1770,28 @@ fn row_style(selected: bool, current: bool) -> Style {
     }
 }
 
-fn render_list_pane<F>(
+#[allow(clippy::too_many_arguments)]
+fn render_list_pane<F, A>(
     frame: &mut Frame,
     area: Rect,
     title: &str,
     len: usize,
     view: &mut ListView,
     active: bool,
+    gutter: u16,
+    art_source: A,
     render_item: F,
-) -> Option<HitArea>
+) -> (Option<HitArea>, Vec<ArtSlot>)
 where
     F: Fn(usize) -> Line<'static>,
+    A: Fn(usize) -> Option<ArtSource>,
 {
     let block = pane_block(title, active);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if inner.height == 0 || inner.width == 0 {
-        return None;
+        return (None, Vec::new());
     }
     if len == 0 {
         frame.render_widget(
@@ -1699,13 +1800,14 @@ where
                 .alignment(Alignment::Center),
             inner,
         );
-        return None;
+        return (None, Vec::new());
     }
 
     view.ensure_visible(len, inner.height as usize);
     let cursor = view.cursor;
     let start = view.offset;
     let end = (start + inner.height as usize).min(len);
+    let mut slots = Vec::new();
 
     for (row, index) in (start..end).enumerate() {
         let selected = active && index == cursor;
@@ -1717,20 +1819,37 @@ where
         } else {
             Style::default().fg(theme().fg)
         };
+        if gutter > 0
+            && let Some(source) = art_source(index)
+        {
+            slots.push(ArtSlot {
+                key: source.key(),
+                source,
+                rect: Rect {
+                    x: inner.x,
+                    y: inner.y + row as u16,
+                    width: ART_WIDTH.min(gutter),
+                    height: 1,
+                },
+            });
+        }
         frame.render_widget(
             Paragraph::new(render_item(index)).style(style),
             Rect {
-                x: inner.x,
+                x: inner.x + gutter,
                 y: inner.y + row as u16,
-                width: inner.width,
+                width: inner.width.saturating_sub(gutter),
                 height: 1,
             },
         );
     }
-    Some(HitArea {
-        rect: inner,
-        offset: start,
-    })
+    (
+        Some(HitArea {
+            rect: inner,
+            offset: start,
+        }),
+        slots,
+    )
 }
 
 fn draw_search(app: &mut App, frame: &mut Frame, area: Rect) {

@@ -32,6 +32,9 @@ mouse = false
 # card at the bottom of the screen.
 lyrics_in_card = true
 
+# Draw small artwork thumbnails at the start of queue/library rows.
+inline_art = true
+
 [layout]
 # Library pane percentages.
 artists_width = 30
@@ -61,6 +64,10 @@ bars = 64
 # When embedded/folder art is missing, look it up on MusicBrainz and the
 # Cover Art Archive. Results are cached in ~/.cache/neo-ncmp/covers.
 online = false
+
+# Fetch artist portraits for artist rows from Deezer (no API key required).
+# Results are cached in ~/.cache/neo-ncmp/artists.
+artist_images = true
 
 [search.saved]
 # Named filter queries appear in the command palette as smart playlists.

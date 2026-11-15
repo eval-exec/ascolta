@@ -4,10 +4,10 @@ expression: "buffer_text(120, 40, &mut app)"
 ---
  neo-ncmp  1 Q  2 Lib  3 Pl  4 Out  5 St  6 Ly  7 Vis  8 Tag  9 Hist  0 Br                                  ● MPD 0.24.0
 ┌ Queue — 3 songs ─────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│     # Title                                                         Artist               Album                   Time│
-│     1 Mysterons                                                     Portishead           Dummy                   5:05│
-│▶    2 Sour Times                                                    Portishead           Dummy                   3:26│
-│     3 Angel                                                         Massive Attack       Mezzanine               6:22│
+│         # Title                                                     Artist               Album                   Time│
+│         1 Mysterons                                                 Portishead           Dummy                   5:05│
+│    ▶    2 Sour Times                                                Portishead           Dummy                   3:26│
+│         3 Angel                                                     Massive Attack       Mezzanine               6:22│
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
