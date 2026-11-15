@@ -3761,6 +3761,44 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual benchmark; builds a 100k-song queue"]
+    fn benchmark_rendering_a_large_queue() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use std::time::Instant;
+
+        let mut app = app();
+        app.config.layout.cover_sidebar = false;
+        app.queue = (0..100_000)
+            .map(|position| Song {
+                pos: Some(position),
+                id: Some(position + 1),
+                uri: Arc::from(format!("Music/Artist/{position}.flac")),
+                artist: Some(Arc::from(format!("Artist {}", position % 2_000))),
+                album: Some(Arc::from(format!("Album {}", position % 20_000))),
+                title: Some(Arc::from(format!("Track {position}"))),
+                duration: Some(Duration::from_secs(180)),
+                ..Song::default()
+            })
+            .collect();
+        app.status = Some(MpdStatus {
+            state: PlaybackState::Paused,
+            playlist_length: 100_000,
+            ..MpdStatus::default()
+        });
+        app.current = app.queue.first().cloned();
+
+        let mut terminal = Terminal::new(TestBackend::new(200, 60)).unwrap();
+        let started = Instant::now();
+        for _ in 0..100 {
+            terminal
+                .draw(|frame| crate::ui::draw(&mut app, frame))
+                .unwrap();
+        }
+        eprintln!("100 queue frames: {:?}", started.elapsed());
+    }
+
+    #[test]
     fn every_screen_renders_at_common_terminal_sizes() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
