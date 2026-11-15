@@ -5,7 +5,7 @@ members = ["crates/ascolta", "crates/ascolta-domain", "crates/ascolta-mpd"]
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.90"
 license = "MIT"
 repository = "https://github.com/eval-exec/ascolta"
 

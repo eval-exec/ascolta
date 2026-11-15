@@ -10,7 +10,7 @@ MPRIS, scrobbling, and instant fuzzy search.
 
 [![CI](https://github.com/eval-exec/ascolta/actions/workflows/ci.yml/badge.svg)](https://github.com/eval-exec/ascolta/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust 1.90+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org/)
 [![MPD 0.23+](https://img.shields.io/badge/MPD-0.23%2B-green.svg)](https://www.musicpd.org/)
 
 </div>
@@ -114,11 +114,17 @@ cargo build --release
 
 ### cargo-binstall
 
-Prebuilt Linux archives are supported:
+Prebuilt archives are published for **x86_64 Linux (glibc)** and **aarch64
+Linux (glibc)** as GitHub release assets. `cargo-binstall` picks the matching
+archive, verifies it, and installs the binary without compiling:
 
 ```sh
 cargo binstall ascolta
 ```
+
+If no archive matches the current target, binstall can fall back to building
+from source. musl/Alpine archives are not published yet; use a glibc target or
+build from source.
 
 ### Nix
 
@@ -138,9 +144,56 @@ cd ascolta
 makepkg -si
 ```
 
+### Docker
+
+Multi-arch images (`linux/amd64`, `linux/arm64`) are published to GitHub
+Container Registry:
+
+```sh
+mkdir -p ~/.config/ascolta ~/.local/state/ascolta ~/.cache/ascolta
+
+docker run --rm -it --init --network host \
+  -e TERM=xterm-256color \
+  -v ~/.config/ascolta:/config/ascolta \
+  -v ~/.local/state/ascolta:/state/ascolta \
+  -v ~/.cache/ascolta:/cache/ascolta \
+  -v ~/Music:/music:ro \
+  ghcr.io/eval-exec/ascolta:latest
+```
+
+The container runs as UID 1000 and stores everything under `/config`, `/state`,
+and `/cache` (the XDG directories are redirected there). Create the bind-mount
+directories first so they are owned by your user. Images are tagged
+`latest`, `X.Y.Z`, and `X.Y`.
+
+`--network host` lets Ascolta reach MPD and the library at `127.0.0.1`. Use this
+config inside the container:
+
+```toml
+[mpd]
+host = "127.0.0.1"
+port = 6600
+
+[library]
+music_directory = "/music"
+```
+
+MPD itself stays on the host; the container only runs the TUI client. On Docker
+Desktop (macOS/Windows), host networking is unavailable: use `-p`/`host.docker.internal`
+and set `ASCOLTA_MPD_HOST=host.docker.internal` instead. Drop `:ro` from the
+music mount if you want in-app tag editing to write files.
+
+A Compose example is available at
+[docker-compose.example.yml](docker-compose.example.yml).
+
+The image is intentionally minimal. MPRIS and desktop notifications need a
+session D-Bus socket passed into the container, and the PipeWire visualizer needs
+`pw-record` plus the PipeWire socket; those integrations are easier to use with
+a native install.
+
 ### Requirements
 
-- Rust **1.89+** for building (edition 2024)
+- Rust **1.90+** for building (edition 2024)
 - MPD **0.23+** (developed against 0.24)
 - Linux for MPRIS and desktop notifications; the TUI and remote CLI are portable
 - PipeWire (`pw-record`, `pw-metadata`) only if you use the PipeWire visualizer
@@ -273,7 +326,8 @@ Legacy `NEO_NCMP_*` variables are still accepted.
 ```
 
 Existing `neo-ncmp` config, state, and cache directories are migrated to the
-`ascolta` paths automatically on first launch.
+`ascolta` paths automatically on first launch. In the Docker image these paths
+are remapped to `/config/ascolta`, `/state/ascolta`, and `/cache/ascolta`.
 
 ## Integrations
 
@@ -404,7 +458,8 @@ at 200×60 stays under ~2 ms per frame.
 - The PipeWire visualizer needs `pw-record` and `pw-metadata`. The FIFO mode
   needs an MPD `fifo` output.
 - Tag editing writes tags only; embedded art editing is not exposed yet.
-- MPRIS and desktop notifications are Linux-oriented.
+- MPRIS and desktop notifications are Linux-oriented. In Docker they also need
+  the session D-Bus socket; the default image does not include PipeWire tools.
 - The UI is English-only for now.
 
 See [ROADMAP.md](ROADMAP.md) for what is next.

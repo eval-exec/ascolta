@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.89-slim-bookworm AS builder
+FROM rust:1.90-slim-bookworm AS builder
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -11,7 +11,9 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 1000 ascolta
+    && useradd --create-home --uid 1000 ascolta \
+    && mkdir -p /config/ascolta /state/ascolta /cache/ascolta \
+    && chown -R ascolta:ascolta /config /state /cache
 
 COPY --from=builder /src/target/release/ascolta /usr/local/bin/ascolta
 COPY docs/ascolta.1 /usr/local/share/man/man1/ascolta.1

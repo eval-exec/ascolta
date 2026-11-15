@@ -38,7 +38,12 @@ the repository.
    ```
 
 7. The `Release` workflow builds Linux x86_64/aarch64 archives.
-8. Publish the GitHub release with notes.
-9. The `Publish crates` workflow runs on the published release and uploads
-   `ascolta-domain`, then `ascolta-mpd`, then `ascolta` in order. It can also be
-   started manually with `gh workflow run publish.yml`.
+8. The `Docker` workflow builds and pushes multi-arch images to
+   `ghcr.io/eval-exec/ascolta`, tagged `latest`, `X.Y.Z`, and `X.Y`. It can also
+   be started manually with `gh workflow run docker.yml`.
+9. Publish the GitHub release with notes.
+10. The `Publish crates` workflow runs on the published release and uploads
+    `ascolta-domain`, then `ascolta-mpd`, then `ascolta` in order. It can also be
+    started manually with `gh workflow run publish.yml`.
+11. If the GHCR package was created for the first time, set its visibility to
+    public under **Package settings → Danger zone → Change visibility**.

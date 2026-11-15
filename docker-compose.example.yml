@@ -14,6 +14,6 @@ services:
       - ~/.config/ascolta:/config/ascolta
       - ~/.local/state/ascolta:/state/ascolta
       - ~/.cache/ascolta:/cache/ascolta
-      - ~/Music:/music
+      - ~/Music:/music:ro
     # If the host UID is not 1000, uncomment and adjust:
     # user: "1000:1000"
