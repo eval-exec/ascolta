@@ -54,7 +54,6 @@ MPD owns playback; neo-ncmp is a controller, library UI, and desktop citizen.
 - [x] Configurable multi-column layout: library and playlist pane proportions
 - [x] Bottom Now Playing card with cover art, metadata, progress, and lyrics
 - [x] Crossfade control from the palette, `remote crossfade`, and IPC
-- [x] Path/filename metadata fallback and title de-duplication for untagged downloads
 - [x] Mouse support (opt-in): wheel, header tabs, row selection, double-click actions
 - [x] Search history (persisted) and saved filter queries
 - [x] TrackList (current-centred window) and Playlists MPRIS interfaces

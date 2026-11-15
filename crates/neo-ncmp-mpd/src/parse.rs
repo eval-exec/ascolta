@@ -278,7 +278,7 @@ mod tests {
 
         let songs = songs(&response);
         assert_eq!(songs.len(), 2);
-        assert_eq!(songs[0].display_title(), "one");
+        assert_eq!(songs[0].display_title(), "one.flac");
         assert_eq!(songs[0].artist.as_deref(), Some("Portishead"));
         assert_eq!(songs[0].track, Some(3));
         assert_eq!(songs[0].pos, Some(0));

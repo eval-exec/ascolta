@@ -38,7 +38,6 @@ neo-ncmp is a first-class controller and desktop citizen.
 **Library**
 
 - Artist → album → track browser, case-insensitive, grouped by album artist
-- Untagged files derive artist/album/title from their path and filename; downloader noise (track numbers, `Official Video`, repeated album suffixes) is cleaned for display while raw tags stay untouched
 - Directory-first file browser (`0`) over MPD `lsinfo`; open folders, enqueue, or replace the queue
 - Library-wide fuzzy search (`/`) using `nucleo-matcher`, run on a coalescing worker
 - Structured search filters: `artist:`, `album:`, `title:`, `genre:`, `format:`, `year:>=1990`, `-genre:rock`
