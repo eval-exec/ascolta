@@ -44,7 +44,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mpd mpc
 
-      - name: Start a private MPD
+      - name: Live MPD tests
+        env:
+          MPD_HOST: 127.0.0.1
+          MPD_PORT: 6601
         run: |
           mkdir -p "$HOME/mpd/music" "$HOME/mpd/playlists"
           cat > "$HOME/mpd/mpd.conf" <<EOF
@@ -60,16 +63,19 @@ jobs:
             name "null"
           }
           EOF
-          mpd --no-daemon "$HOME/mpd/mpd.conf" &
+          mpd --no-daemon "$HOME/mpd/mpd.conf" > "$HOME/mpd/mpd.log" 2>&1 &
+          MPD_PID=$!
+          trap 'kill "$MPD_PID" 2>/dev/null || true' EXIT
+          ready=0
           for _ in $(seq 1 20); do
-            mpc -h 127.0.0.1 -p 6601 status && exit 0
+            if mpc -h 127.0.0.1 -p 6601 status >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
             sleep 1
           done
-          echo "MPD did not start" >&2
-          exit 1
-
-      - name: Live MPD tests
-        env:
-          MPD_HOST: 127.0.0.1
-          MPD_PORT: 6601
-        run: cargo test -p ascolta-mpd --test live -- --ignored --nocapture
+          if [ "$ready" -ne 1 ]; then
+            cat "$HOME/mpd/mpd.log" >&2
+            exit 1
+          fi
+          cargo test -p ascolta-mpd --test live -- --ignored --nocapture
