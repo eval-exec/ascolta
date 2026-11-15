@@ -27,10 +27,16 @@ jobs:
         run: |
           set -euo pipefail
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          is_published() {
+            local crate="$1"
+            curl --fail --silent --show-error \
+              --user-agent "ascolta-release-ci" \
+              "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null 2>&1
+          }
           wait_for_index() {
             local crate="$1"
             for _ in $(seq 1 30); do
-              if cargo info "${crate}@${version}" >/dev/null 2>&1; then
+              if is_published "${crate}"; then
                 return 0
               fi
               sleep 2
@@ -40,7 +46,7 @@ jobs:
           }
 
           for crate in ascolta-domain ascolta-mpd ascolta; do
-            if cargo info "${crate}@${version}" >/dev/null 2>&1; then
+            if is_published "${crate}"; then
               echo "${crate} ${version} is already published; skipping"
             else
               cargo publish -p "${crate}" --locked
